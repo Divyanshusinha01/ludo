@@ -16,6 +16,11 @@ const body = DM_Sans({
 export const metadata: Metadata = {
   title: "Family Ludo",
   description: "Play 2–4 player Ludo online with a room code — no accounts needed.",
+  appleWebApp: {
+    capable: true,
+    title: "Family Ludo",
+    statusBarStyle: "default",
+  },
 };
 
 export const viewport: Viewport = {

@@ -19,21 +19,48 @@ export const tick = internalMutation({
   args: {},
   handler: async (ctx) => {
     const now = Date.now();
-    const rooms = await ctx.db.query("rooms").collect();
 
-    for (const room of rooms) {
-      const age = now - room.createdAt;
-      const finishedAge = now - (room.finishedAt ?? room.createdAt);
+    // Lobby TTL — createdAt is required, so a range query is exact.
+    const expiredLobbies = await ctx.db
+      .query("rooms")
+      .withIndex("by_status_createdAt", (q) =>
+        q.eq("status", "lobby").lt("createdAt", now - LOBBY_TTL_MS),
+      )
+      .collect();
+    for (const room of expiredLobbies) {
+      await deleteRoomCascade(ctx, room._id);
+    }
+
+    // Finished TTL — prefer finishedAt index; also catch docs missing finishedAt.
+    const expiredFinished = await ctx.db
+      .query("rooms")
+      .withIndex("by_status_finishedAt", (q) =>
+        q.eq("status", "finished").lt("finishedAt", now - FINISHED_TTL_MS),
+      )
+      .collect();
+    for (const room of expiredFinished) {
+      await deleteRoomCascade(ctx, room._id);
+    }
+
+    const finishedRooms = await ctx.db
+      .query("rooms")
+      .withIndex("by_status", (q) => q.eq("status", "finished"))
+      .collect();
+    for (const room of finishedRooms) {
+      if (room.finishedAt !== undefined) continue;
+      if (now - room.createdAt > FINISHED_TTL_MS) {
+        await deleteRoomCascade(ctx, room._id);
+      }
+    }
+
+    // Presence / AFK / idle only matter for active games.
+    const playingRooms = await ctx.db
+      .query("rooms")
+      .withIndex("by_status", (q) => q.eq("status", "playing"))
+      .collect();
+
+    for (const room of playingRooms) {
       const activityAge = now - (room.lastActivityAt ?? room.createdAt);
-
-      if (room.status === "finished" && finishedAge > FINISHED_TTL_MS) {
-        await deleteRoomCascade(ctx, room._id);
-        continue;
-      }
-      if (room.status === "lobby" && age > LOBBY_TTL_MS) {
-        await deleteRoomCascade(ctx, room._id);
-        continue;
-      }
 
       const players = await ctx.db
         .query("players")
@@ -45,8 +72,6 @@ export const tick = internalMutation({
           await ctx.db.patch(p._id, { connected: false });
         }
       }
-
-      if (room.status !== "playing") continue;
 
       const refreshed = await ctx.db
         .query("players")

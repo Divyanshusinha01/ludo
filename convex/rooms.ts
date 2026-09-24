@@ -9,7 +9,7 @@ import {
   nextColorAmong,
   pickNextColor,
 } from "./lib/ludo";
-import { assertValidClientId, CREATE_RATE_WINDOW_MS } from "./lib/session";
+import { assertValidClientId, CREATE_RATE_WINDOW_MS, JOIN_RATE_WINDOW_MS, MAX_JOINS_PER_WINDOW } from "./lib/session";
 import { colorValidator } from "./schema";
 
 async function uniqueCode(ctx: MutationCtx): Promise<string> {
@@ -199,6 +199,7 @@ export const createRoom = mutation({
       color,
       connected: true,
       lastSeenAt: now,
+      joinedAt: now,
     });
 
     return { roomId, code, color };
@@ -250,6 +251,17 @@ export const joinRoom = mutation({
       throw new Error("Game already started");
     }
 
+    const mySeats = await ctx.db
+      .query("players")
+      .withIndex("by_client", (q) => q.eq("clientId", clientId))
+      .collect();
+    const recentJoins = mySeats.filter(
+      (p) => now - (p.joinedAt ?? 0) < JOIN_RATE_WINDOW_MS,
+    );
+    if (recentJoins.length >= MAX_JOINS_PER_WINDOW) {
+      throw new Error("Slow down — try again in a moment");
+    }
+
     const players = await ctx.db
       .query("players")
       .withIndex("by_room", (q) => q.eq("roomId", room._id))
@@ -278,6 +290,7 @@ export const joinRoom = mutation({
       color,
       connected: true,
       lastSeenAt: now,
+      joinedAt: now,
     });
 
     // Defend against rare double-insert same colour.

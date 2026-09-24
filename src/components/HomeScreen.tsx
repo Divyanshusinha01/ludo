@@ -12,6 +12,7 @@ import {
   useSessionId,
   useStoredName,
 } from "@/lib/player";
+import { InstallHint } from "./InstallHint";
 import styles from "./HomeScreen.module.css";
 
 export function HomeScreen() {
@@ -143,6 +144,7 @@ export function HomeScreen() {
       )}
 
       <ErrorText>{error}</ErrorText>
+      <InstallHint />
     </div>
   );
 }

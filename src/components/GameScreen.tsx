@@ -7,6 +7,7 @@ import { api } from "../../convex/_generated/api";
 import { Id } from "../../convex/_generated/dataModel";
 import { getLegalMoves } from "../../convex/lib/ludo";
 import { useRoomPresence } from "@/hooks/useRoomPresence";
+import { haptic } from "@/lib/haptics";
 import { Board } from "./Board";
 import { Dice } from "./Dice";
 import { Button, ErrorText, StatusText } from "./ui";
@@ -25,7 +26,7 @@ type Props = {
 
 function isNotableEvent(event: string | undefined): boolean {
   if (!event) return false;
-  return /no moves|three 6s|turn skipped|wins|captured|roll again|left/i.test(
+  return /no moves|three 6s|turn skipped|wins|captured|roll again|left|away/i.test(
     event,
   );
 }
@@ -67,10 +68,14 @@ export function GameScreen({ roomId, clientId }: Props) {
   const canRoll = myTurn && !room.diceRolled;
   const turnLabel = COLOR_LABEL[room.currentTurn as Color];
   const notable = isNotableEvent(room.lastEvent);
+  const turnPlayer = players.find((p) => p.color === room.currentTurn);
+  const turnAway =
+    room.status === "playing" && !!turnPlayer && !turnPlayer.connected;
 
   async function onRoll() {
     setError(null);
     setRolling(true);
+    haptic("roll");
     try {
       await rollDice({ roomId, clientId });
     } catch (e) {
@@ -82,8 +87,11 @@ export function GameScreen({ roomId, clientId }: Props) {
 
   async function onSelectToken(tokenIndex: number) {
     setError(null);
+    haptic("tap");
     try {
-      await moveToken({ roomId, clientId, tokenIndex });
+      const result = await moveToken({ roomId, clientId, tokenIndex });
+      if (result.won) haptic("win");
+      else if (result.captured) haptic("capture");
     } catch (e) {
       setError(formatConvexError(e, "Illegal move"));
     }
@@ -111,6 +119,14 @@ export function GameScreen({ roomId, clientId }: Props) {
       setBusy(false);
     }
   }
+
+  const waitingLabel = canRoll
+    ? undefined
+    : myTurn
+      ? "Choose a token"
+      : turnAway
+        ? `${turnLabel} is away`
+        : `Waiting for ${turnLabel}`;
 
   return (
     <div className={styles.game}>
@@ -140,7 +156,7 @@ export function GameScreen({ roomId, clientId }: Props) {
                 style={{ background: COLOR_HEX[room.currentTurn as Color] }}
               />
               {turnLabel}&apos;s turn
-              {myTurn ? " — you" : ""}
+              {myTurn ? " — you" : turnAway ? " — away" : ""}
             </h2>
           )}
           <p className={styles.event} aria-live="polite">
@@ -152,13 +168,7 @@ export function GameScreen({ roomId, clientId }: Props) {
             value={room.diceValue}
             rolling={rolling}
             disabled={!canRoll}
-            waitingLabel={
-              canRoll
-                ? undefined
-                : myTurn
-                  ? "Choose a token"
-                  : `Waiting for ${turnLabel}`
-            }
+            waitingLabel={waitingLabel}
             onRoll={onRoll}
           />
         )}
@@ -170,11 +180,18 @@ export function GameScreen({ roomId, clientId }: Props) {
         </p>
       )}
 
+      {turnAway && !myTurn && room.status === "playing" && (
+        <p className={styles.afk} role="status">
+          {turnLabel} is away — their turn skips in about a minute if they
+          don&apos;t return.
+        </p>
+      )}
+
       <ul className={styles.players}>
         {players.map((p) => (
           <li
             key={p._id}
-            className={`${styles.player} ${p.color === room.currentTurn ? styles.active : ""}`}
+            className={`${styles.player} ${p.color === room.currentTurn ? styles.active : ""} ${!p.connected ? styles.away : ""}`}
             style={{ ["--c" as string]: COLOR_HEX[p.color as Color] }}
           >
             <span className={styles.swatch} />
@@ -223,7 +240,7 @@ export function GameScreen({ roomId, clientId }: Props) {
         {myTurn && !room.diceRolled && room.status === "playing" && (
           <p className={styles.prompt}>Your turn — roll the dice</p>
         )}
-        {!myTurn && room.status === "playing" && (
+        {!myTurn && room.status === "playing" && !turnAway && (
           <p className={styles.waiting}>Waiting for {turnLabel}…</p>
         )}
         <ErrorText>{error}</ErrorText>

@@ -20,7 +20,8 @@
 
 - `npm run dev` — Next.js frontend
 - `npm run dev:convex` — Convex backend watcher
-- `npm test` / `npm run test:logic` — pure Ludo rules + roll policy + geometry unit checks
+- `npm test` / `npm run test:logic` — pure Ludo rules + roll policy + geometry (Vitest)
+- `npm run test:watch` — Vitest watch mode
 - `npm run test:integration` — live Convex smoke (needs `.env.local`)
 - `npm run build` — production Next.js build
 
@@ -31,6 +32,9 @@
 - Two tokens on one cell fan out (barrier / safe stacks are tappable)
 - Leave during play returns home and forfeits the seat
 - Create game submits with Enter from the name field
+- Away-player banner when the current turn seat is disconnected
+- Home-screen install tip appears on phones (dismissible)
+- Haptics (where supported) on roll / capture / win
 
 ## Deploy (production — phones need Convex cloud)
 

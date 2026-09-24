@@ -4,6 +4,9 @@ const CLIENT_ID_RE =
 
 export const MAX_CLIENT_ID_LEN = 64;
 export const CREATE_RATE_WINDOW_MS = 15_000;
+/** Max new room joins per client within the window (reconnects excluded). */
+export const JOIN_RATE_WINDOW_MS = 10_000;
+export const MAX_JOINS_PER_WINDOW = 3;
 
 export function assertValidClientId(clientId: string): string {
   const id = clientId.trim();

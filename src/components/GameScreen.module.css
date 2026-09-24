@@ -139,6 +139,22 @@
   color: var(--muted);
 }
 
+.afk {
+  margin: 0;
+  padding: 0.55rem 0.75rem;
+  text-align: center;
+  font-size: 0.9rem;
+  line-height: 1.35;
+  color: var(--ink);
+  background: rgba(230, 161, 0, 0.18);
+  border-radius: 10px;
+  border: 1px solid rgba(230, 161, 0, 0.35);
+}
+
+.away {
+  opacity: 0.65;
+}
+
 .endActions {
   display: flex;
   gap: 0.65rem;

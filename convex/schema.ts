@@ -41,7 +41,11 @@ export default defineSchema({
     seatedColors: v.optional(v.array(colorValidator)),
   })
     .index("by_code", ["code"])
-    .index("by_host", ["hostClientId"]),
+    .index("by_host", ["hostClientId"])
+    .index("by_status", ["status"])
+    .index("by_status_createdAt", ["status", "createdAt"])
+    .index("by_status_finishedAt", ["status", "finishedAt"])
+    .index("by_status_lastActivityAt", ["status", "lastActivityAt"]),
 
   players: defineTable({
     roomId: v.id("rooms"),
@@ -50,10 +54,13 @@ export default defineSchema({
     color: colorValidator,
     connected: v.boolean(),
     lastSeenAt: v.number(),
+    /** Set on first seat insert — used for join rate-limiting. */
+    joinedAt: v.optional(v.number()),
   })
     .index("by_room", ["roomId"])
     .index("by_room_client", ["roomId", "clientId"])
-    .index("by_room_color", ["roomId", "color"]),
+    .index("by_room_color", ["roomId", "color"])
+    .index("by_client", ["clientId"]),
 
   tokens: defineTable({
     roomId: v.id("rooms"),
