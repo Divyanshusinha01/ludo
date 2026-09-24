@@ -1,6 +1,7 @@
 import { internalMutation, MutationCtx } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { buildFinalRankings, Color } from "./lib/ludo";
+import { withEvent } from "./lib/events";
 import { logEvent } from "./lib/log";
 
 /** Mark away if no heartbeat within this window. */
@@ -143,7 +144,7 @@ export const tick = internalMutation({
             rankings,
             finishedAt: now,
             diceRolled: false,
-            lastEvent: `${sole.name} wins — others left`,
+            ...withEvent(room, `${sole.name} wins — others left`, now),
           });
           continue;
         }

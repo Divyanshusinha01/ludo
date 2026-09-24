@@ -26,6 +26,7 @@ import {
   sanitizePlayerName,
 } from "./lib/session";
 import { colorValidator } from "./schema";
+import { freshEvents, withEvent, withEvents } from "./lib/events";
 
 async function uniqueCode(ctx: MutationCtx): Promise<string> {
   for (let i = 0; i < 20; i++) {
@@ -54,6 +55,7 @@ function publicRoom(room: Doc<"rooms">) {
     winner: room.winner,
     rankings: room.rankings ?? [],
     lastEvent: room.lastEvent,
+    events: room.events ?? [],
     createdAt: room.createdAt,
     finishedAt: room.finishedAt ?? null,
     vsComputer: !!room.vsComputer,
@@ -168,6 +170,17 @@ async function resetBoard(
 
   const firstTurn = activeColors[0]!;
   const turnId = 1;
+
+  // Players still have old finish state until patched below; names/colors are fine.
+  const playersForNames = await ctx.db
+    .query("players")
+    .withIndex("by_room", (q) => q.eq("roomId", roomId))
+    .collect();
+  const firstPlayer = playersForNames.find((p) => p.color === firstTurn);
+  const turnText = firstPlayer
+    ? `${firstPlayer.name}'s turn`
+    : `${firstTurn}'s turn`;
+
   await ctx.db.patch(roomId, {
     status: "playing",
     currentTurn: firstTurn,
@@ -180,13 +193,10 @@ async function resetBoard(
     winner: null,
     rankings: [],
     lastActivityAt: now,
-    lastEvent,
+    ...freshEvents([lastEvent, turnText], now),
   });
 
-  const players = await ctx.db
-    .query("players")
-    .withIndex("by_room", (q) => q.eq("roomId", roomId))
-    .collect();
+  const players = playersForNames;
   for (const p of players) {
     await ctx.db.patch(p._id, {
       lives: MAX_TIMEOUT_LIVES,
@@ -346,7 +356,7 @@ export const createVsComputer = mutation({
       ctx,
       roomId,
       seated,
-      `Game started — ${seated[0]} rolls first`,
+      `Game started — ${name} rolls first`,
       now,
     );
     await ctx.db.patch(roomId, { seatedColors: seated });
@@ -623,10 +633,11 @@ export const leaveRoom = mutation({
         .collect();
       const playable = remaining.filter((p) => !p.eliminated);
       const seated = seatedFromPlayers(remaining);
+      const leaveText = `${player.name} left the game`;
       const patches: Record<string, unknown> = {
         seatedColors: seated,
         lastActivityAt: now,
-        lastEvent: `${player.name} left the game`,
+        ...withEvent(room, leaveText, now),
       };
 
       const hostStillSeated = remaining.some(
@@ -668,7 +679,14 @@ export const leaveRoom = mutation({
         patches.finishedAt = now;
         patches.diceRolled = false;
         patches.rankings = rankings;
-        patches.lastEvent = `${sole.name} wins — ${player.name} left`;
+        Object.assign(
+          patches,
+          withEvents(
+            room,
+            [leaveText, `${sole.name} wins — ${player.name} left`],
+            now,
+          ),
+        );
         await ctx.db.patch(args.roomId, patches);
         logEvent("game_finished", {
           roomCode: room.code,
@@ -684,6 +702,10 @@ export const leaveRoom = mutation({
           playable.map((p) => p.color as Color),
         );
         const turnId = (room.turnId ?? 0) + 1;
+        const nextPlayer = playable.find((p) => p.color === nextTurn);
+        const turnText = nextPlayer
+          ? `${nextPlayer.name}'s turn`
+          : `${nextTurn}'s turn`;
         patches.currentTurn = nextTurn;
         patches.diceRolled = false;
         patches.diceValue = null;
@@ -691,6 +713,10 @@ export const leaveRoom = mutation({
         patches.turnId = turnId;
         patches.turnStartedAt = now;
         patches.lastMovedTokenIndex = null;
+        Object.assign(
+          patches,
+          withEvents(room, [leaveText, turnText], now),
+        );
 
         await ctx.db.patch(args.roomId, patches);
         await ctx.scheduler.runAfter(
@@ -822,11 +848,12 @@ export const startGame = mutation({
 
     const activeColors = seatedFromPlayers(players);
     const now = Date.now();
+    const first = players.find((p) => p.color === activeColors[0]);
     await resetBoard(
       ctx,
       args.roomId,
       activeColors,
-      `Game started — ${activeColors[0]} rolls first`,
+      `Game started — ${first?.name ?? activeColors[0]} rolls first`,
       now,
     );
     await ctx.db.patch(args.roomId, { seatedColors: activeColors });
@@ -891,11 +918,12 @@ export const rematch = mutation({
     }
 
     const activeColors = seatedFromPlayers(remaining);
+    const first = remaining.find((p) => p.color === activeColors[0]);
     await resetBoard(
       ctx,
       args.roomId,
       activeColors,
-      `Rematch — ${activeColors[0]} rolls first`,
+      `Rematch — ${first?.name ?? activeColors[0]} rolls first`,
       now,
     );
     await ctx.db.patch(args.roomId, { seatedColors: activeColors });
@@ -929,6 +957,12 @@ const roomBundleValidator = v.union(
       winner: v.union(colorValidator, v.null()),
       rankings: v.array(colorValidator),
       lastEvent: v.optional(v.string()),
+      events: v.array(
+        v.object({
+          at: v.number(),
+          text: v.string(),
+        }),
+      ),
       createdAt: v.number(),
       finishedAt: v.union(v.number(), v.null()),
       vsComputer: v.boolean(),

@@ -54,13 +54,6 @@ function sleep(ms: number) {
   return new Promise<void>((r) => setTimeout(r, ms));
 }
 
-function isNotableEvent(event: string | undefined): boolean {
-  if (!event) return false;
-  return /no moves|three 6s|turn skipped|wins|captured|roll again|left|away|timed out|eliminated|reached home/i.test(
-    event,
-  );
-}
-
 function useTurnCountdown(
   turnStartedAt: number | null,
   timeoutMs: number,
@@ -213,6 +206,14 @@ export function GameScreen({ roomId, clientId }: Props) {
     return getLegalMoves(tokens, data.me.color, diceValue);
   }, [data, animating, localDice, optimisticTokens, serverTokens]);
 
+  const moveLogRef = useRef<HTMLUListElement>(null);
+  const eventCount = data?.room.events?.length ?? 0;
+  useEffect(() => {
+    const el = moveLogRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [eventCount]);
+
   if (!data) return <StatusText>Loading game…</StatusText>;
 
   const { room, players, me } = data;
@@ -226,7 +227,6 @@ export function GameScreen({ roomId, clientId }: Props) {
   const canRoll =
     myTurn && !diceRolled && !rolling && !animating && !optimisticTokens;
   const turnLabel = COLOR_LABEL[room.currentTurn as Color];
-  const notable = isNotableEvent(room.lastEvent);
   const turnPlayer = players.find((p) => p.color === room.currentTurn);
   const turnAway =
     room.status === "playing" &&
@@ -474,9 +474,6 @@ export function GameScreen({ roomId, clientId }: Props) {
                     : ""}
             </h2>
           )}
-          <p className={styles.event} aria-live="polite">
-            {room.lastEvent}
-          </p>
         </div>
       </header>
 
@@ -505,18 +502,35 @@ export function GameScreen({ roomId, clientId }: Props) {
         </div>
       )}
 
+      {(room.events?.length ?? 0) > 0 && (
+        <div className={styles.moveLog} aria-label="Move history">
+          <p className={styles.moveLogTitle}>Moves</p>
+          <ul
+            ref={moveLogRef}
+            className={styles.moveLogList}
+            aria-live="polite"
+            aria-relevant="additions"
+          >
+            {room.events!.map((e, i) => (
+              <li
+                key={`${e.at}-${i}`}
+                className={
+                  i === room.events!.length - 1 ? styles.moveLogLatest : undefined
+                }
+              >
+                {e.text}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {threeSixesBanner && room.status === "playing" && (
         <p className={styles.ruleBanner} role="status">
           Three 6s in a row — turn voided
           {/token returned/i.test(room.lastEvent ?? "")
             ? "; token sent back to yard"
             : ""}
-        </p>
-      )}
-
-      {notable && room.status === "playing" && !threeSixesBanner && (
-        <p className={styles.banner} role="status" aria-live="polite">
-          {room.lastEvent}
         </p>
       )}
 

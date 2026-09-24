@@ -40,6 +40,15 @@ export default defineSchema({
     /** Finish order (winner first, then subsequent finishers / survivors). */
     rankings: v.optional(v.array(colorValidator)),
     lastEvent: v.optional(v.string()),
+    /** Shared move / turn log for the current match (newest last). */
+    events: v.optional(
+      v.array(
+        v.object({
+          at: v.number(),
+          text: v.string(),
+        }),
+      ),
+    ),
     createdAt: v.number(),
     /** Set when status becomes finished — used for finished TTL. */
     finishedAt: v.optional(v.number()),

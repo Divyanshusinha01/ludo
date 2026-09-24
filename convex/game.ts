@@ -27,6 +27,7 @@ import {
   TURN_TIMEOUT_MS,
 } from "./lib/ludo";
 import { BOT_THINK_MS, pickBotMove } from "./lib/bot";
+import { withEvent, withEvents } from "./lib/events";
 import { GameError, fail } from "./lib/errors";
 import { logEvent } from "./lib/log";
 import {
@@ -112,11 +113,27 @@ async function beginTurn(
 ) {
   const turnId = (room.turnId ?? 0) + 1;
   const now = Date.now();
-  // `patch` may include lastEvent / diceValue (last face for UI).
+  const players = await seatedPlayers(ctx, room._id);
+  const nextPlayer = players.find((p) => p.color === next);
+  const turnText = nextPlayer
+    ? `${nextPlayer.name}'s turn`
+    : `${next}'s turn`;
+
+  const prior =
+    typeof patch.lastEvent === "string" ? patch.lastEvent : undefined;
+  const { lastEvent, events } = withEvents(
+    room,
+    prior ? [prior, turnText] : [turnText],
+    now,
+  );
+
+  // `patch` may include diceValue (last face for UI). Drop lastEvent —
+  // we replace it with the appended log fields below.
+  const { lastEvent: _ignored, ...restPatch } = patch;
   // Turn-control fields below always win over patch.
   await ctx.db.patch(room._id, {
     diceValue: null,
-    ...patch,
+    ...restPatch,
     currentTurn: next,
     diceRolled: false,
     consecutiveSixes: 0,
@@ -124,6 +141,8 @@ async function beginTurn(
     turnId,
     turnStartedAt: now,
     lastActivityAt: now,
+    lastEvent,
+    events,
   });
   await scheduleTurnTimeout(ctx, room._id, turnId);
   await maybeScheduleBotTurn(ctx, room._id, turnId);
@@ -178,7 +197,7 @@ async function maybeFinishSoleSurvivor(
     diceRolled: false,
     finishedAt: now,
     lastActivityAt: now,
-    lastEvent: `${sole.name} wins — others eliminated`,
+    ...withEvent(room, `${sole.name} wins — others eliminated`, now),
   });
   logEvent("game_finished", {
     roomCode: room.code,
@@ -337,8 +356,8 @@ async function executeRoll(
     const next = nextColorAmong(room.currentTurn, seated);
     const event =
       penaltyIndex !== null
-        ? `${player.color} rolled three 6s — token returned home, turn skipped`
-        : `${player.color} rolled three 6s — turn skipped`;
+        ? `${player.name} rolled three 6s — token returned home, turn skipped`
+        : `${player.name} rolled three 6s — turn skipped`;
 
     await beginTurn(ctx, room, next, {
       diceValue: value,
@@ -359,7 +378,11 @@ async function executeRoll(
       diceRolled: false,
       consecutiveSixes: decision.consecutiveSixes,
       lastActivityAt: now,
-      lastEvent: `${player.color} rolled 6 but cannot move — roll again`,
+      ...withEvent(
+        room,
+        `${player.name} rolled 6 but cannot move — roll again`,
+        now,
+      ),
     });
     return { value, skipped: false, legalMoves, rollAgain: true };
   }
@@ -368,7 +391,7 @@ async function executeRoll(
     const next = nextColorAmong(room.currentTurn, seated);
     await beginTurn(ctx, room, next, {
       diceValue: value,
-      lastEvent: `${player.color} rolled ${value} — no moves`,
+      lastEvent: `${player.name} rolled ${value} — no moves`,
     });
     return { value, skipped: true, legalMoves };
   }
@@ -378,7 +401,7 @@ async function executeRoll(
     diceRolled: true,
     consecutiveSixes: decision.consecutiveSixes,
     lastActivityAt: now,
-    lastEvent: `${player.color} rolled ${value}`,
+    ...withEvent(room, `${player.name} rolled ${value}`, now),
   });
 
   return { value, skipped: false, legalMoves };
@@ -502,6 +525,9 @@ async function executeMove(
   if (hasWon(updatedTokens, player.color)) {
     const rankings = [...(room.rankings ?? []), player.color as Color];
     await ctx.db.patch(player._id, { finishRank: rankings.length });
+    const moveNote = captured
+      ? `${player.name} captured and finished — wins!`
+      : `${player.name} wins!`;
     await ctx.db.patch(roomId, {
       status: "finished",
       winner: player.color,
@@ -512,7 +538,7 @@ async function executeMove(
       lastMovedTokenIndex: null,
       finishedAt: now,
       lastActivityAt: now,
-      lastEvent: `${player.name} (${player.color}) wins!`,
+      ...withEvent(room, moveNote, now),
     });
     logEvent("game_finished", {
       roomCode: room.code,
@@ -532,14 +558,18 @@ async function executeMove(
   const players = await seatedPlayers(ctx, roomId);
   const seated = playableColors(players);
   const extraTurn = gainsExtraTurn(dice, !!captured, reachedHome);
+  const capturedPlayer = captured
+    ? players.find((p) => p.color === captured.color)
+    : undefined;
+  const capturedLabel = capturedPlayer?.name ?? captured?.color;
 
   if (extraTurn) {
     const turnId = (room.turnId ?? 0) + 1;
     const reason = reachedHome
-      ? `${player.color} reached home — roll again`
+      ? `${player.name} reached home — roll again`
       : captured
-        ? `${player.color} captured ${captured.color} — roll again`
-        : `${player.color} rolled 6 — roll again`;
+        ? `${player.name} captured ${capturedLabel} — roll again`
+        : `${player.name} rolled 6 — roll again`;
 
     await ctx.db.patch(roomId, {
       diceRolled: false,
@@ -549,15 +579,18 @@ async function executeMove(
       turnId,
       turnStartedAt: now,
       lastActivityAt: now,
-      lastEvent: reason,
+      ...withEvent(room, reason, now),
     });
     await scheduleTurnTimeout(ctx, roomId, turnId);
     await maybeScheduleBotTurn(ctx, roomId, turnId);
   } else {
     const next = nextColorAmong(room.currentTurn, seated);
+    const moveText = captured
+      ? `${player.name} captured ${capturedLabel}`
+      : `${player.name} moved`;
     await beginTurn(ctx, room, next, {
       diceValue: dice,
-      lastEvent: `${player.color} moved`,
+      lastEvent: moveText,
     });
   }
 
@@ -749,7 +782,7 @@ export const playBotTurn = internalMutation({
       const seated = playableColors(players);
       const next = nextColorAmong(room.currentTurn, seated);
       await beginTurn(ctx, room, next, {
-        lastEvent: `${player.color} — no moves`,
+        lastEvent: `${player.name} — no moves`,
       });
       return null;
     }
