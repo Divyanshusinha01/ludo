@@ -447,6 +447,7 @@ export function GameScreen({ roomId, clientId }: Props) {
                 : rankedPlayers.map((p) => p.color)
               ).map((color, i) => {
                 const p = players.find((x) => x.color === color);
+                const isWinner = color === room.winner;
                 return (
                   <li
                     key={color}
@@ -455,7 +456,7 @@ export function GameScreen({ roomId, clientId }: Props) {
                     <span className={styles.rankNum}>{i + 1}</span>
                     <span className={styles.swatch} />
                     {p?.name ?? COLOR_LABEL[color as Color]}
-                    {i === 0 ? " · winner" : ""}
+                    {isWinner ? " · winner" : p?.eliminated ? " · out" : ""}
                   </li>
                 );
               })}

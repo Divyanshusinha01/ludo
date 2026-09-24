@@ -45,6 +45,33 @@ export const MAX_TIMEOUT_LIVES = 3;
 /** How long a disconnected seat is kept before AFK skip / abandon logic. */
 export const RECONNECT_WINDOW_MS = 60_000;
 
+/**
+ * Winner-first standings. Existing finishers stay at the front; the winner
+ * is next if missing; everyone else follows by finishRank ascending
+ * (higher finishRank = worse place = later in the list).
+ */
+export function buildFinalRankings(
+  existing: Color[],
+  winner: Color,
+  others: Array<{ color: Color; finishRank?: number | null }>,
+): Color[] {
+  const rankings: Color[] = [];
+  for (const c of existing) {
+    if (!rankings.includes(c)) rankings.push(c);
+  }
+  if (!rankings.includes(winner)) rankings.push(winner);
+
+  const rest = others
+    .filter((p) => p.color !== winner && !rankings.includes(p.color))
+    .sort(
+      (a, b) =>
+        (a.finishRank ?? 999) - (b.finishRank ?? 999) ||
+        COLORS.indexOf(a.color) - COLORS.indexOf(b.color),
+    );
+  for (const p of rest) rankings.push(p.color);
+  return rankings;
+}
+
 /** Ambiguity-free charset for room codes (no 0/O/1/I). */
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -200,6 +227,54 @@ export function generateRoomCode(): string {
     code += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)]!;
   }
   return code;
+}
+
+/** Weight for faces 1–5. Face 6 uses this too unless yard anti-stall applies. */
+export const DICE_FACE_WEIGHT = 1;
+/**
+ * Mild anti-stall: when every token is still in the yard, face 6 gets this
+ * weight (others stay at 1). P(6) = 2/7 ≈ 28.6% instead of 1/6 ≈ 16.7%.
+ * Never guarantees a 6 and does not consider legal moves.
+ */
+export const YARD_SIX_WEIGHT = 2;
+
+/** True when the colour has tokens and every one is still in the yard. */
+export function allTokensInYard(
+  tokens: TokenState[],
+  color: Color,
+): boolean {
+  const mine = tokens.filter((t) => t.color === color);
+  return mine.length > 0 && mine.every((t) => t.steps === -1);
+}
+
+/**
+ * Server-authoritative fair roll. Uniform 1–6 normally; mild extra weight
+ * on 6 only when all of that player's tokens are still in the yard.
+ * `random` is injectable for tests (must return [0, 1)).
+ */
+export function rollFairDice(
+  allInYard: boolean,
+  random: () => number = Math.random,
+): number {
+  if (!allInYard) {
+    return 1 + Math.floor(random() * 6);
+  }
+
+  const weights = [
+    DICE_FACE_WEIGHT,
+    DICE_FACE_WEIGHT,
+    DICE_FACE_WEIGHT,
+    DICE_FACE_WEIGHT,
+    DICE_FACE_WEIGHT,
+    YARD_SIX_WEIGHT,
+  ];
+  const total = weights.reduce((sum, w) => sum + w, 0);
+  let cursor = random() * total;
+  for (let face = 0; face < 6; face++) {
+    cursor -= weights[face]!;
+    if (cursor < 0) return face + 1;
+  }
+  return 6;
 }
 
 /** Pure roll outcome used by rollDice and unit tests. */

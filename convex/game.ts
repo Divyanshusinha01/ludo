@@ -9,6 +9,8 @@ import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import {
+  allTokensInYard,
+  buildFinalRankings,
   Color,
   decideRollOutcome,
   findCaptureTarget,
@@ -19,6 +21,7 @@ import {
   MAX_TIMEOUT_LIVES,
   nextColorAmong,
   pickThreeSixesPenaltyToken,
+  rollFairDice,
   TokenState,
   tryMoveSteps,
   TURN_TIMEOUT_MS,
@@ -106,7 +109,7 @@ async function returnTokensToYard(
 
 /**
  * When only one playable colour remains, they win.
- * Rankings: existing finishers first, then survivor, then eliminated.
+ * Rankings: existing finishers first, then survivor, then eliminated/forfeits last.
  */
 async function maybeFinishSoleSurvivor(
   ctx: MutationCtx,
@@ -118,15 +121,14 @@ async function maybeFinishSoleSurvivor(
 
   const sole = alive[0]!;
   const now = Date.now();
-  const rankings: Color[] = [...(room.rankings ?? [])];
-  if (!rankings.includes(sole.color as Color)) {
-    rankings.push(sole.color as Color);
-  }
-  for (const p of players) {
-    if (p.eliminated && !rankings.includes(p.color as Color)) {
-      rankings.push(p.color as Color);
-    }
-  }
+  const rankings = buildFinalRankings(
+    room.rankings ?? [],
+    sole.color as Color,
+    players.map((p) => ({
+      color: p.color as Color,
+      finishRank: p.finishRank,
+    })),
+  );
 
   await ctx.db.patch(sole._id, {
     finishRank: rankings.indexOf(sole.color as Color) + 1,
@@ -168,8 +170,8 @@ export const rollDice = mutation({
 
     const players = await seatedPlayers(ctx, args.roomId);
     const seated = playableColors(players);
-    const value = 1 + Math.floor(Math.random() * 6);
     const tokens = await loadTokens(ctx, args.roomId);
+    const value = rollFairDice(allTokensInYard(tokens, player.color as Color));
     const legalMoves = getLegalMoves(tokens, player.color, value);
     const decision = decideRollOutcome(
       value,
@@ -422,18 +424,16 @@ export const handleTurnTimeout = internalMutation({
     const lives = (current.lives ?? MAX_TIMEOUT_LIVES) - 1;
 
     if (lives <= 0) {
+      // Place = number still playable including this player (first out = last place).
+      const place = playableColors(players).length;
       await ctx.db.patch(current._id, {
         lives: 0,
         eliminated: true,
+        finishRank: place,
       });
       await returnTokensToYard(ctx, args.roomId, current.color as Color);
 
       const refreshed = await seatedPlayers(ctx, args.roomId);
-      const rankings = [...(room.rankings ?? [])];
-      // Eliminated players append later in sole-survivor finish; mark seat.
-      await ctx.db.patch(current._id, {
-        finishRank: rankings.length + refreshed.filter((p) => p.eliminated).length,
-      });
 
       if (await maybeFinishSoleSurvivor(ctx, room, refreshed)) return;
 

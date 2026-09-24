@@ -1,17 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { Lobby } from "@/components/Lobby";
 import { GameScreen } from "@/components/GameScreen";
-import { Button, StatusText } from "@/components/ui";
+import { Button, ErrorText, StatusText } from "@/components/ui";
 import {
   formatConvexError,
-  getStoredName,
   normalizeCode,
   storeName,
+  takePendingJoinName,
   useSessionId,
 } from "@/lib/player";
 import styles from "./room.module.css";
@@ -19,9 +19,10 @@ import styles from "./room.module.css";
 export function RoomClient({ code }: { code: string }) {
   const clientId = useSessionId();
   const [joinError, setJoinError] = useState<string | null>(null);
-  const [retryKey, setRetryKey] = useState(0);
+  const [name, setName] = useState("");
+  const [joining, setJoining] = useState(false);
   const [offline, setOffline] = useState(false);
-  const joinAttempted = useRef(false);
+  const pendingJoinTried = useRef(false);
   const roomCode = normalizeCode(code);
 
   const data = useQuery(
@@ -48,30 +49,24 @@ export function RoomClient({ code }: { code: string }) {
   const roomMissing = data === null;
   const roomLoading = data === undefined;
 
+  // Home "Join game" already collected a name — join once, no prefill UI.
   useEffect(() => {
-    joinAttempted.current = false;
-  }, [roomCode, retryKey]);
+    if (!clientId || roomLoading || roomMissing || hasMe) return;
+    if (roomStatus !== "lobby" || pendingJoinTried.current || joining) return;
 
-  useEffect(() => {
-    if (!clientId || roomLoading || roomMissing) return;
-    if (hasMe || joinAttempted.current || joinError) return;
-    if (roomStatus !== "lobby") return;
+    const pending = takePendingJoinName();
+    if (!pending) return;
 
-    joinAttempted.current = true;
-    const name = getStoredName() || "Player";
-    storeName(name);
-    void joinRoom({
-      code: roomCode,
-      clientId,
-      name,
-    })
-      .then(() => {
-        setJoinError(null);
+    pendingJoinTried.current = true;
+    setJoining(true);
+    setJoinError(null);
+    void joinRoom({ code: roomCode, clientId, name: pending })
+      .catch((err) => {
+        pendingJoinTried.current = false;
+        setJoinError(formatConvexError(err, "Could not join"));
+        setName("");
       })
-      .catch((e) => {
-        joinAttempted.current = false;
-        setJoinError(formatConvexError(e, "Could not join"));
-      });
+      .finally(() => setJoining(false));
   }, [
     clientId,
     roomLoading,
@@ -80,9 +75,32 @@ export function RoomClient({ code }: { code: string }) {
     roomStatus,
     roomCode,
     joinRoom,
-    retryKey,
-    joinError,
+    joining,
   ]);
+
+  async function onJoin(e: FormEvent) {
+    e.preventDefault();
+    if (!clientId || joining) return;
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setJoinError("Enter your name");
+      return;
+    }
+    setJoining(true);
+    setJoinError(null);
+    try {
+      storeName(trimmed);
+      await joinRoom({
+        code: roomCode,
+        clientId,
+        name: trimmed,
+      });
+    } catch (err) {
+      setJoinError(formatConvexError(err, "Could not join"));
+    } finally {
+      setJoining(false);
+    }
+  }
 
   if (!clientId || (roomCode.length === 6 && roomLoading)) {
     return <StatusText>Connecting…</StatusText>;
@@ -98,28 +116,45 @@ export function RoomClient({ code }: { code: string }) {
     );
   }
 
-  const spectatorBlocked =
-    !hasMe && roomStatus !== "lobby" && !joinError;
-
-  if (joinError || spectatorBlocked) {
+  if (!hasMe && roomStatus !== "lobby") {
     return (
       <div className={styles.center}>
         <h1>Could not join</h1>
-        <p role={joinError ? "alert" : undefined}>
-          {joinError ??
-            "This game already started and you are not in it."}
-        </p>
-        {joinError && roomStatus === "lobby" && (
+        <p>This game already started and you are not in it.</p>
+        <Link href="/">Back home</Link>
+      </div>
+    );
+  }
+
+  if (!hasMe && roomStatus === "lobby") {
+    if (joining) {
+      return <StatusText>Joining room…</StatusText>;
+    }
+    return (
+      <div className={styles.center}>
+        <h1>Join room {roomCode}</h1>
+        <p>Type your name to sit down.</p>
+        <form className={styles.joinForm} onSubmit={onJoin}>
+          <label className={styles.field}>
+            Your name
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              maxLength={20}
+              placeholder="e.g. Divsi"
+              autoComplete="off"
+              autoFocus
+            />
+          </label>
           <Button
+            type="submit"
             variant="primary"
-            onClick={() => {
-              setJoinError(null);
-              setRetryKey((k) => k + 1);
-            }}
+            disabled={joining || !name.trim() || !clientId}
           >
-            Try again
+            Join game
           </Button>
-        )}
+        </form>
+        <ErrorText>{joinError}</ErrorText>
         <Link href="/">Back home</Link>
       </div>
     );

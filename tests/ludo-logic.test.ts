@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  allTokensInYard,
   canRelease,
   createInitialTokens,
   decideRollOutcome,
   findCaptureTarget,
+  buildFinalRankings,
   gainsExtraTurn,
   getLegalMoves,
   hasWon,
@@ -11,9 +13,11 @@ import {
   nextColorAmong,
   pickNextColor,
   pickThreeSixesPenaltyToken,
+  rollFairDice,
   stackFanOffset,
   tryMoveSteps,
   absoluteTrackPosition,
+  YARD_SIX_WEIGHT,
 } from "../convex/lib/ludo";
 import { assertValidClientId } from "../convex/lib/session";
 import { normalizeCode } from "../src/lib/player";
@@ -132,6 +136,58 @@ describe("win and roll policy", () => {
     tokens[1]!.steps = 20;
     expect(pickThreeSixesPenaltyToken(tokens, "red", 0)).toBe(0);
     expect(pickThreeSixesPenaltyToken(tokens, "red", null)).toBe(1);
+  });
+
+  it("puts leavers/eliminated after the winner in rankings", () => {
+    expect(
+      buildFinalRankings([], "green", [
+        { color: "red", finishRank: 2 },
+        { color: "green", finishRank: null },
+        { color: "yellow", finishRank: 3 },
+      ]),
+    ).toEqual(["green", "red", "yellow"]);
+
+    // First to leave (higher finishRank) is last place.
+    expect(
+      buildFinalRankings([], "blue", [
+        { color: "blue" },
+        { color: "red", finishRank: 3 },
+        { color: "green", finishRank: 2 },
+      ]),
+    ).toEqual(["blue", "green", "red"]);
+  });
+});
+
+describe("fair dice", () => {
+  it("detects when every token is still in the yard", () => {
+    const tokens = createInitialTokens(["red", "green"]);
+    expect(allTokensInYard(tokens, "red")).toBe(true);
+    tokens[0]!.steps = 0;
+    expect(allTokensInYard(tokens, "red")).toBe(false);
+    expect(allTokensInYard(tokens, "green")).toBe(true);
+  });
+
+  it("rolls uniform 1–6 when not all in yard", () => {
+    const seen = new Set<number>();
+    for (let i = 0; i < 6; i++) {
+      seen.add(rollFairDice(false, () => i / 6));
+    }
+    expect([...seen].sort()).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("boosts six mildly in the yard without guaranteeing it", () => {
+    expect(YARD_SIX_WEIGHT).toBe(2);
+    // Weights [1,1,1,1,1,2] total 7 — last 2/7 of the unit interval → 6
+    expect(rollFairDice(true, () => 0)).toBe(1);
+    expect(rollFairDice(true, () => 5 / 7)).toBe(6);
+    expect(rollFairDice(true, () => 4.9 / 7)).toBe(5);
+  });
+
+  it("does not pick faces from legal-move advantage", () => {
+    // Same RNG in yard or not must not inspect board state beyond the flag.
+    expect(rollFairDice(false, () => 0.99)).toBe(6);
+    expect(rollFairDice(true, () => 0.99)).toBe(6);
+    expect(rollFairDice(true, () => 0.1)).toBe(1);
   });
 });
 

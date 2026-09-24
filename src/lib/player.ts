@@ -162,6 +162,29 @@ export function storeName(name: string) {
   localStorage.setItem("ludo_player_name", name);
 }
 
+/** One-shot name from the home join form — not shown as a prefill. */
+const PENDING_JOIN_NAME_KEY = "ludo_pending_join_name";
+
+export function setPendingJoinName(name: string) {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.setItem(PENDING_JOIN_NAME_KEY, name.trim().slice(0, 20));
+  } catch {
+    /* private mode */
+  }
+}
+
+export function takePendingJoinName(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    const value = sessionStorage.getItem(PENDING_JOIN_NAME_KEY) ?? "";
+    sessionStorage.removeItem(PENDING_JOIN_NAME_KEY);
+    return value.trim().slice(0, 20);
+  } catch {
+    return "";
+  }
+}
+
 export function normalizeCode(raw: string): string {
   return raw.replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 6);
 }

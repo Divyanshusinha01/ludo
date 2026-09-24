@@ -8,9 +8,9 @@ import { Button, ErrorText } from "./ui";
 import {
   formatConvexError,
   normalizeCode,
+  setPendingJoinName,
   storeName,
   useSessionId,
-  useStoredName,
 } from "@/lib/player";
 import { InstallHint } from "./InstallHint";
 import styles from "./HomeScreen.module.css";
@@ -19,22 +19,25 @@ export function HomeScreen() {
   const router = useRouter();
   const createRoom = useMutation(api.rooms.createRoom);
   const [mode, setMode] = useState<"home" | "join">("home");
-  const storedName = useStoredName();
-  const [name, setName] = useState<string | null>(null);
+  const [name, setName] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const clientId = useSessionId();
-  const displayName = name ?? storedName;
 
   async function onCreate(e: FormEvent) {
     e.preventDefault();
     if (!clientId) return;
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setError("Enter your name");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
-      storeName(displayName);
-      const res = await createRoom({ clientId, name: displayName });
+      storeName(trimmed);
+      const res = await createRoom({ clientId, name: trimmed });
       router.push(`/room/${res.code}`);
     } catch (err) {
       setError(formatConvexError(err, "Failed to create"));
@@ -47,7 +50,13 @@ export function HomeScreen() {
     e.preventDefault();
     if (!clientId) return;
     setError(null);
-    storeName(displayName);
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setError("Enter your name");
+      return;
+    }
+    storeName(trimmed);
+    setPendingJoinName(trimmed);
     const normalized = normalizeCode(code);
     if (normalized.length !== 6) {
       setError("Enter a 6-character room code");
@@ -72,11 +81,11 @@ export function HomeScreen() {
           <label className={styles.field}>
             Your name
             <input
-              value={displayName}
+              value={name}
               onChange={(e) => setName(e.target.value)}
               maxLength={20}
               placeholder="e.g. Divsi"
-              autoComplete="nickname"
+              autoComplete="off"
             />
           </label>
           {!clientId && (
@@ -87,14 +96,14 @@ export function HomeScreen() {
           <Button
             type="submit"
             variant="primary"
-            disabled={busy || !displayName.trim() || !clientId}
+            disabled={busy || !name.trim() || !clientId}
           >
             Create game
           </Button>
           <Button
             type="button"
             variant="secondary"
-            disabled={busy || !displayName.trim() || !clientId}
+            disabled={busy || !clientId}
             onClick={() => setMode("join")}
           >
             Join game
@@ -105,11 +114,11 @@ export function HomeScreen() {
           <label className={styles.field}>
             Your name
             <input
-              value={displayName}
+              value={name}
               onChange={(e) => setName(e.target.value)}
               maxLength={20}
               placeholder="e.g. Divsi"
-              autoComplete="nickname"
+              autoComplete="off"
             />
           </label>
           <label className={styles.field}>
@@ -128,7 +137,7 @@ export function HomeScreen() {
             type="submit"
             variant="primary"
             disabled={
-              busy || !displayName.trim() || code.length !== 6 || !clientId
+              busy || !name.trim() || code.length !== 6 || !clientId
             }
           >
             Join room

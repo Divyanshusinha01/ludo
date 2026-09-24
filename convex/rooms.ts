@@ -5,6 +5,7 @@ import { internal } from "./_generated/api";
 import {
   COLORS,
   Color,
+  buildFinalRankings,
   createInitialTokens,
   generateRoomCode,
   MAX_TIMEOUT_LIVES,
@@ -177,6 +178,7 @@ async function resetBoard(
     await ctx.db.patch(p._id, {
       lives: MAX_TIMEOUT_LIVES,
       eliminated: false,
+      finishRank: undefined,
     });
   }
 
@@ -418,9 +420,27 @@ export const leaveRoom = mutation({
     const now = Date.now();
 
     if (room.status === "playing") {
-      // Forfeit: remove seat and tokens so turns no longer cycle ghosts.
+      // Forfeit: keep the seat so final rankings can show their name last.
       const color = player.color as Color;
-      await ctx.db.delete(player._id);
+      if (player.eliminated) {
+        await ctx.db.delete(player._id);
+        return { emptied: false };
+      }
+
+      const allPlayers = await ctx.db
+        .query("players")
+        .withIndex("by_room", (q) => q.eq("roomId", args.roomId))
+        .collect();
+      const playableBefore = allPlayers.filter((p) => !p.eliminated);
+      const place = playableBefore.length; // first to leave = last place
+
+      await ctx.db.patch(player._id, {
+        eliminated: true,
+        connected: false,
+        lives: 0,
+        finishRank: place,
+        lastSeenAt: now,
+      });
 
       const tokens = await ctx.db
         .query("tokens")
@@ -434,7 +454,7 @@ export const leaveRoom = mutation({
         .query("players")
         .withIndex("by_room", (q) => q.eq("roomId", args.roomId))
         .collect();
-
+      const playable = remaining.filter((p) => !p.eliminated);
       const seated = seatedFromPlayers(remaining);
       const patches: Record<string, unknown> = {
         seatedColors: seated,
@@ -442,38 +462,54 @@ export const leaveRoom = mutation({
         lastEvent: `${player.name} left the game`,
       };
 
-      if (room.hostClientId === clientId && remaining.length > 0) {
-        const nextHost = remaining.sort(
+      const hostStillSeated = remaining.some(
+        (p) => p.clientId === room.hostClientId && !p.eliminated,
+      );
+      if (!hostStillSeated && playable.length > 0) {
+        const nextHost = playable.sort(
           (a, b) => COLORS.indexOf(a.color) - COLORS.indexOf(b.color),
         )[0]!;
         patches.hostClientId = nextHost.clientId;
       }
 
-      if (remaining.length === 0) {
+      if (playable.length === 0) {
         const tok = await ctx.db
           .query("tokens")
           .withIndex("by_room", (q) => q.eq("roomId", args.roomId))
           .collect();
         for (const t of tok) await ctx.db.delete(t._id);
+        for (const p of remaining) await ctx.db.delete(p._id);
         await ctx.db.delete(args.roomId);
         return { emptied: true };
       }
 
-      if (remaining.length === 1) {
-        const sole = remaining[0]!;
+      if (playable.length === 1) {
+        const sole = playable[0]!;
+        const rankings = buildFinalRankings(
+          room.rankings ?? [],
+          sole.color as Color,
+          remaining.map((p) => ({
+            color: p.color as Color,
+            finishRank: p.finishRank,
+          })),
+        );
+        await ctx.db.patch(sole._id, {
+          finishRank: rankings.indexOf(sole.color as Color) + 1,
+        });
         patches.status = "finished";
         patches.winner = sole.color;
         patches.finishedAt = now;
         patches.diceRolled = false;
-        patches.rankings = [sole.color as Color, color];
+        patches.rankings = rankings;
         patches.lastEvent = `${sole.name} wins — ${player.name} left`;
-      } else if (room.currentTurn === color) {
-        const seatedPlayable = seated.filter((c) =>
-          remaining.some((p) => p.color === c && !p.eliminated),
-        );
+        await ctx.db.patch(args.roomId, patches);
+        return { emptied: false };
+      }
+
+      if (room.currentTurn === color) {
         const nextTurn = nextColorAmong(
           color,
-          seatedPlayable.length > 0 ? seatedPlayable : seated,
+          playable.map((p) => p.color as Color),
         );
         const turnId = (room.turnId ?? 0) + 1;
         patches.currentTurn = nextTurn;
@@ -641,9 +677,11 @@ export const rematch = mutation({
       .withIndex("by_room", (q) => q.eq("roomId", args.roomId))
       .collect();
 
-    // Drop seats that have been away since before the finish.
+    // Drop forfeits who already left, and seats away since before the finish.
     for (const p of players) {
-      if (!p.connected && now - p.lastSeenAt > STALE_SEAT_MS) {
+      const forfeitGone = !!p.eliminated && !p.connected;
+      const staleAway = !p.connected && now - p.lastSeenAt > STALE_SEAT_MS;
+      if (forfeitGone || staleAway) {
         await ctx.db.delete(p._id);
         const tokens = await ctx.db
           .query("tokens")

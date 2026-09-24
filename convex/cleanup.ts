@@ -1,6 +1,6 @@
 import { internalMutation, MutationCtx } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
-import { Color } from "./lib/ludo";
+import { buildFinalRankings, Color } from "./lib/ludo";
 
 /** Mark away if no heartbeat within this window. */
 const STALE_MS = 45_000;
@@ -102,15 +102,35 @@ export const tick = internalMutation({
         );
         if (now - newestSeen > UNDERPOPULATED_MS) {
           const sole = connected[0];
-          await ctx.db.patch(room._id, {
-            status: "finished",
-            winner: sole ? (sole.color as Color) : null,
-            finishedAt: now,
-            diceRolled: false,
-            lastEvent: sole
-              ? `${sole.name} wins — others left`
-              : "Game ended — no players left",
-          });
+          if (sole) {
+            const rankings = buildFinalRankings(
+              room.rankings ?? [],
+              sole.color as Color,
+              refreshed.map((p) => ({
+                color: p.color as Color,
+                finishRank: p.finishRank ?? (p.connected ? null : 999),
+              })),
+            );
+            await ctx.db.patch(sole._id, {
+              finishRank: rankings.indexOf(sole.color as Color) + 1,
+            });
+            await ctx.db.patch(room._id, {
+              status: "finished",
+              winner: sole.color as Color,
+              rankings,
+              finishedAt: now,
+              diceRolled: false,
+              lastEvent: `${sole.name} wins — others left`,
+            });
+          } else {
+            await ctx.db.patch(room._id, {
+              status: "finished",
+              winner: null,
+              finishedAt: now,
+              diceRolled: false,
+              lastEvent: "Game ended — no players left",
+            });
+          }
           continue;
         }
       }

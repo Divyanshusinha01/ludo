@@ -9,8 +9,52 @@
   display: grid;
   gap: 0.75rem;
   padding: 2rem 1rem;
+  width: min(100%, 360px);
+  margin: 0 auto;
 }
 
 .center a {
   color: var(--accent-ink);
+}
+
+.center h1 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.6rem;
+}
+
+.center p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.joinForm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  text-align: left;
+  margin-top: 0.5rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.field input {
+  appearance: none;
+  border: 2px solid rgba(30, 24, 16, 0.15);
+  background: rgba(255, 255, 255, 0.7);
+  border-radius: 12px;
+  padding: 0.85rem 1rem;
+  font-size: 1.05rem;
+  color: var(--ink);
+  font-family: inherit;
+}
+
+.field input:focus {
+  border-color: var(--accent);
 }
