@@ -67,6 +67,8 @@ export const tick = internalMutation({
         .collect();
 
       for (const p of players) {
+        // Bots stay connected; they do not heartbeat.
+        if (p.isBot) continue;
         if (p.connected && now - p.lastSeenAt > STALE_MS) {
           await ctx.db.patch(p._id, { connected: false });
         }
@@ -79,6 +81,25 @@ export const tick = internalMutation({
 
       if (activityAge > PLAYING_IDLE_MS) {
         await deleteRoomCascade(ctx, room._id);
+        continue;
+      }
+
+      const humans = refreshed.filter((p) => !p.isBot);
+      const connectedHumans = humans.filter((p) => p.connected);
+
+      // Vs-computer: abandon when no human is connected (bots must not keep the room alive).
+      if (room.vsComputer) {
+        if (connectedHumans.length === 0) {
+          const newestHumanSeen = humans.reduce(
+            (max, p) => Math.max(max, p.lastSeenAt),
+            0,
+          );
+          if (now - newestHumanSeen > PLAYING_ABANDON_MS) {
+            await deleteRoomCascade(ctx, room._id);
+            continue;
+          }
+        }
+        // Skip underpopulated auto-win — one human + bots is the normal shape.
         continue;
       }
 
@@ -95,10 +116,10 @@ export const tick = internalMutation({
         }
       }
 
-      const connected = refreshed.filter((p) => p.connected);
+      const connected = refreshed.filter((p) => p.connected && !p.isBot);
       // Only auto-crown when exactly one human is still connected.
       // If everyone is offline, wait for abandon/idle TTL so reconnects can resume.
-      if (connected.length === 1 && refreshed.length >= 2) {
+      if (connected.length === 1 && refreshed.filter((p) => !p.isBot).length >= 2) {
         const newestSeen = refreshed.reduce(
           (max, p) => Math.max(max, p.lastSeenAt),
           0,

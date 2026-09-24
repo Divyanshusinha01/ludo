@@ -50,6 +50,8 @@ export default defineSchema({
      * Concurrent joins patch this field; losers retry.
      */
     seatedColors: v.optional(v.array(colorValidator)),
+    /** Solo vs-computer room — rejects human joins; bots are server-driven. */
+    vsComputer: v.optional(v.boolean()),
   })
     .index("by_code", ["code"])
     .index("by_host", ["hostClientId"])
@@ -75,6 +77,8 @@ export default defineSchema({
     joinedAt: v.optional(v.number()),
     /** Last gameplay/presence action — used for action rate-limiting. */
     lastActionAt: v.optional(v.number()),
+    /** Server-driven seat; never accepts client heartbeats as authority. */
+    isBot: v.optional(v.boolean()),
   })
     .index("by_room", ["roomId"])
     .index("by_room_client", ["roomId", "clientId"])

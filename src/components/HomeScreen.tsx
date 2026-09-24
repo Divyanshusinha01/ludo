@@ -19,9 +19,11 @@ import styles from "./HomeScreen.module.css";
 export function HomeScreen() {
   const router = useRouter();
   const createRoom = useMutation(api.rooms.createRoom);
-  const [mode, setMode] = useState<"home" | "join">("home");
+  const createVsComputer = useMutation(api.rooms.createVsComputer);
+  const [mode, setMode] = useState<"home" | "join" | "computer">("home");
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
+  const [botCount, setBotCount] = useState(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const clientId = useSessionId();
@@ -46,6 +48,31 @@ export function HomeScreen() {
       router.push(`/room/${res.code}`);
     } catch (err) {
       setError(formatConvexError(err, "Failed to create"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onVsComputer(e: FormEvent) {
+    e.preventDefault();
+    if (!clientId) return;
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setError("Enter your name");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      storeName(trimmed);
+      const res = await createVsComputer({
+        clientId,
+        name: trimmed,
+        botCount,
+      });
+      router.push(`/room/${res.code}`);
+    } catch (err) {
+      setError(formatConvexError(err, "Failed to start"));
     } finally {
       setBusy(false);
     }
@@ -77,7 +104,8 @@ export function HomeScreen() {
         <p className={styles.brand}>Family Ludo</p>
         <h1 className={styles.headline}>Family phones. One board.</h1>
         <p className={styles.sub}>
-          Create a room, share the code, and play with 2–4 people in realtime.
+          Create a room, share the code, and play with 2–4 people in realtime —
+          or challenge the computer.
         </p>
       </div>
 
@@ -112,6 +140,62 @@ export function HomeScreen() {
             onClick={() => setMode("join")}
           >
             Join game
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={busy || !name.trim() || !clientId}
+            onClick={() => {
+              setError(null);
+              setMode("computer");
+            }}
+          >
+            Play vs computer
+          </Button>
+        </form>
+      ) : mode === "computer" ? (
+        <form className={styles.actions} onSubmit={onVsComputer}>
+          <label className={styles.field}>
+            Your name
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              maxLength={20}
+              placeholder="e.g. Divsi"
+              autoComplete="off"
+            />
+          </label>
+          <fieldset className={styles.botCount}>
+            <legend>Computer opponents</legend>
+            <div className={styles.botCountRow} role="group">
+              {([1, 2, 3] as const).map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  className={
+                    botCount === n ? styles.botCountActive : styles.botCountBtn
+                  }
+                  aria-pressed={botCount === n}
+                  onClick={() => setBotCount(n)}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={busy || !name.trim() || !clientId}
+          >
+            Start game
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => setMode("home")}
+          >
+            Back
           </Button>
         </form>
       ) : (

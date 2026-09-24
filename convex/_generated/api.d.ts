@@ -11,6 +11,7 @@
 import type * as cleanup from "../cleanup.js";
 import type * as crons from "../crons.js";
 import type * as game from "../game.js";
+import type * as lib_bot from "../lib/bot.js";
 import type * as lib_errors from "../lib/errors.js";
 import type * as lib_log from "../lib/log.js";
 import type * as lib_ludo from "../lib/ludo.js";
@@ -27,6 +28,7 @@ declare const fullApi: ApiFromModules<{
   cleanup: typeof cleanup;
   crons: typeof crons;
   game: typeof game;
+  "lib/bot": typeof lib_bot;
   "lib/errors": typeof lib_errors;
   "lib/log": typeof lib_log;
   "lib/ludo": typeof lib_ludo;

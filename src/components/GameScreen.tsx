@@ -166,7 +166,12 @@ export function GameScreen({ roomId, clientId }: Props) {
   const notable = isNotableEvent(room.lastEvent);
   const turnPlayer = players.find((p) => p.color === room.currentTurn);
   const turnAway =
-    room.status === "playing" && !!turnPlayer && !turnPlayer.connected;
+    room.status === "playing" &&
+    !!turnPlayer &&
+    !turnPlayer.connected &&
+    !turnPlayer.isBot;
+  const botThinking =
+    room.status === "playing" && !!turnPlayer?.isBot && !myTurn;
   const seconds = Math.ceil(remainingMs / 1000);
   const timerUrgent = seconds <= 10;
   const threeSixesBanner = /three 6s/i.test(room.lastEvent ?? "");
@@ -325,7 +330,13 @@ export function GameScreen({ roomId, clientId }: Props) {
                 style={{ background: COLOR_HEX[room.currentTurn as Color] }}
               />
               {turnLabel}&apos;s turn
-              {myTurn ? " — you" : turnAway ? " — away" : ""}
+              {myTurn
+                ? " — you"
+                : botThinking
+                  ? " — computer"
+                  : turnAway
+                    ? " — away"
+                    : ""}
             </h2>
           )}
           <p className={styles.event} aria-live="polite">
@@ -374,6 +385,12 @@ export function GameScreen({ roomId, clientId }: Props) {
         </p>
       )}
 
+      {botThinking && (
+        <p className={styles.banner} role="status" aria-live="polite">
+          Computer is thinking…
+        </p>
+      )}
+
       {turnAway && !myTurn && room.status === "playing" && (
         <p className={styles.afk} role="status">
           {turnLabel} is away — reconnect window is open; the turn timer still
@@ -388,7 +405,7 @@ export function GameScreen({ roomId, clientId }: Props) {
           return (
             <li
               key={p._id}
-              className={`${styles.player} ${isActive ? styles.active : ""} ${!p.connected ? styles.away : ""} ${p.eliminated ? styles.eliminated : ""}`}
+              className={`${styles.player} ${isActive ? styles.active : ""} ${!p.connected && !p.isBot ? styles.away : ""} ${p.eliminated ? styles.eliminated : ""}`}
               style={{ ["--c" as string]: COLOR_HEX[p.color as Color] }}
             >
               <span className={styles.swatch} />
@@ -398,11 +415,15 @@ export function GameScreen({ roomId, clientId }: Props) {
                   {p.isMe ? " (you)" : ""}
                   {p.eliminated
                     ? " · out"
-                    : !p.connected
-                      ? " · away"
-                      : isActive
+                    : p.isBot
+                      ? isActive
                         ? " · turn"
-                        : ""}
+                        : ""
+                      : !p.connected
+                        ? " · away"
+                        : isActive
+                          ? " · turn"
+                          : ""}
                 </span>
                 <span className={styles.lives} aria-label={`${p.lives} lives`}>
                   {"♥".repeat(Math.max(0, p.lives))}

@@ -19,6 +19,7 @@ import {
   absoluteTrackPosition,
   YARD_SIX_WEIGHT,
 } from "../convex/lib/ludo";
+import { pickBotMove } from "../convex/lib/bot";
 import { assertValidClientId, assertValidRoomCode, assertActionInterval } from "../convex/lib/session";
 import { GameError } from "../convex/lib/errors";
 import { normalizeCode } from "../src/lib/player";
@@ -231,5 +232,45 @@ describe("session, codes, and board geometry", () => {
     const posA = tokenSvgPosition("red", 0, 5, 0, 2);
     const posB = tokenSvgPosition("blue", 0, 18, 1, 2);
     expect(posA.x !== posB.x || posA.y !== posB.y).toBe(true);
+  });
+});
+
+describe("bot move picker", () => {
+  it("prefers a capture over a plain advance", () => {
+    // Red at steps 5 can move 3 → abs 8 (safe) or we put yellow alone on abs of dest.
+    // Red start=0; yellow start=26. Put red at 10, yellow at absolute overlapping with red+3.
+    // red steps 10 → abs 10; dice 3 → dest 13 → abs 13 (green start, safe — no capture).
+    // Use red steps 4, dice 4 → dest 8 → abs 8 (safe).
+    // red steps 1, dice 2 → dest 3 → abs 3. Place yellow so its abs is 3:
+    // yellow abs = (26 + steps) % 52 = 3 → steps = (3 - 26 + 52) % 52 = 29.
+    const tokens = [
+      { color: "red" as const, index: 0, steps: 1 },
+      { color: "red" as const, index: 1, steps: -1 },
+      { color: "red" as const, index: 2, steps: -1 },
+      { color: "red" as const, index: 3, steps: -1 },
+      { color: "yellow" as const, index: 0, steps: 29 },
+      { color: "yellow" as const, index: 1, steps: -1 },
+      { color: "yellow" as const, index: 2, steps: -1 },
+      { color: "yellow" as const, index: 3, steps: -1 },
+    ];
+    // Also give red a farther token that does not capture.
+    tokens[1] = { color: "red", index: 1, steps: 20 };
+    const pick = pickBotMove(tokens, "red", 2);
+    expect(pick).toBe(0);
+  });
+
+  it("prefers finishing over leaving the yard", () => {
+    const tokens = [
+      { color: "red" as const, index: 0, steps: 55 },
+      { color: "red" as const, index: 1, steps: -1 },
+      { color: "red" as const, index: 2, steps: -1 },
+      { color: "red" as const, index: 3, steps: -1 },
+    ];
+    expect(pickBotMove(tokens, "red", 1)).toBe(0);
+  });
+
+  it("returns null when there are no legal moves", () => {
+    const tokens = createInitialTokens(["red", "yellow"]);
+    expect(pickBotMove(tokens, "red", 3)).toBeNull();
   });
 });

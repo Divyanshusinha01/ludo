@@ -13,6 +13,7 @@ import {
   pickNextColor,
   TURN_TIMEOUT_MS,
 } from "./lib/ludo";
+import { BOT_THINK_MS, botClientId, botDisplayName } from "./lib/bot";
 import { GameError, fail } from "./lib/errors";
 import { logEvent } from "./lib/log";
 import {
@@ -55,6 +56,7 @@ function publicRoom(room: Doc<"rooms">) {
     lastEvent: room.lastEvent,
     createdAt: room.createdAt,
     finishedAt: room.finishedAt ?? null,
+    vsComputer: !!room.vsComputer,
   };
 }
 
@@ -73,6 +75,7 @@ function publicPlayers(
     finishRank: p.finishRank ?? null,
     isMe: sessionId !== null && p.clientId === sessionId,
     isHost: p.clientId === room.hostClientId,
+    isBot: !!p.isBot,
   }));
 }
 
@@ -196,6 +199,11 @@ async function resetBoard(
     roomId,
     turnId,
   });
+  // Bots act after a short delay (no-op when the current seat is human).
+  await ctx.scheduler.runAfter(BOT_THINK_MS, internal.game.playBotTurn, {
+    roomId,
+    turnId,
+  });
 }
 
 const joinResultValidator = v.object({
@@ -260,6 +268,98 @@ export const createRoom = mutation({
   },
 });
 
+export const createVsComputer = mutation({
+  args: {
+    clientId: v.string(),
+    name: v.string(),
+    botCount: v.number(),
+  },
+  returns: joinResultValidator,
+  handler: async (ctx, args) => {
+    const clientId = assertValidClientId(args.clientId);
+    const name = sanitizePlayerName(args.name);
+    const botCount = Math.floor(args.botCount);
+    if (botCount < 1 || botCount > 3) fail(GameError.invalidBotCount);
+
+    const now = Date.now();
+    const hosted = await ctx.db
+      .query("rooms")
+      .withIndex("by_host", (q) => q.eq("hostClientId", clientId))
+      .collect();
+    const recent = hosted.some(
+      (r) => now - r.createdAt < CREATE_RATE_WINDOW_MS,
+    );
+    if (recent) fail(GameError.rateLimited);
+
+    const code = await uniqueCode(ctx);
+    const hostColor = COLORS[0]!;
+
+    const roomId = await ctx.db.insert("rooms", {
+      code,
+      status: "lobby",
+      hostClientId: clientId,
+      currentTurn: "red",
+      diceValue: null,
+      diceRolled: false,
+      consecutiveSixes: 0,
+      winner: null,
+      lastEvent: `${name} vs computer`,
+      createdAt: now,
+      lastActivityAt: now,
+      seatedColors: [hostColor],
+      vsComputer: true,
+    });
+
+    await ctx.db.insert("players", {
+      roomId,
+      clientId,
+      name,
+      color: hostColor,
+      connected: true,
+      lastSeenAt: now,
+      joinedAt: now,
+      lives: MAX_TIMEOUT_LIVES,
+      eliminated: false,
+      isBot: false,
+    });
+
+    const seated: Color[] = [hostColor];
+    for (let i = 0; i < botCount; i++) {
+      const color = pickNextColor(seated);
+      if (!color) break;
+      seated.push(color);
+      await ctx.db.insert("players", {
+        roomId,
+        clientId: botClientId(roomId, color),
+        name: botDisplayName(i),
+        color,
+        connected: true,
+        lastSeenAt: now,
+        joinedAt: now,
+        lives: MAX_TIMEOUT_LIVES,
+        eliminated: false,
+        isBot: true,
+      });
+    }
+
+    await resetBoard(
+      ctx,
+      roomId,
+      seated,
+      `Game started — ${seated[0]} rolls first`,
+      now,
+    );
+    await ctx.db.patch(roomId, { seatedColors: seated });
+
+    logEvent("vs_computer_created", {
+      roomCode: code,
+      clientId,
+      bots: botCount,
+    });
+    return { roomId, code, color: hostColor };
+  },
+});
+
 export const joinRoom = mutation({
   args: {
     code: v.string(),
@@ -306,6 +406,8 @@ export const joinRoom = mutation({
         reconnected: true,
       };
     }
+
+    if (room.vsComputer) fail(GameError.vsComputerOnly);
 
     if (room.status !== "lobby") {
       if (room.status === "finished") fail(GameError.gameFinished);
@@ -467,6 +569,22 @@ export const leaveRoom = mutation({
       status: room.status,
       clientId,
     });
+
+    // Solo vs-computer: human leaving ends the room (bots alone are useless).
+    if (room.vsComputer && !player.isBot) {
+      const allPlayers = await ctx.db
+        .query("players")
+        .withIndex("by_room", (q) => q.eq("roomId", args.roomId))
+        .collect();
+      for (const p of allPlayers) await ctx.db.delete(p._id);
+      const tokens = await ctx.db
+        .query("tokens")
+        .withIndex("by_room", (q) => q.eq("roomId", args.roomId))
+        .collect();
+      for (const t of tokens) await ctx.db.delete(t._id);
+      await ctx.db.delete(args.roomId);
+      return { emptied: true };
+    }
 
     if (room.status === "playing") {
       // Forfeit: keep the seat so final rankings can show their name last.
@@ -747,7 +865,9 @@ export const rematch = mutation({
       .collect();
 
     // Drop forfeits who already left, and seats away since before the finish.
+    // Keep bots — they never "go away".
     for (const p of players) {
+      if (p.isBot) continue;
       const forfeitGone = !!p.eliminated && !p.connected;
       const staleAway = !p.connected && now - p.lastSeenAt > STALE_SEAT_MS;
       if (forfeitGone || staleAway) {
@@ -811,6 +931,7 @@ const roomBundleValidator = v.union(
       lastEvent: v.optional(v.string()),
       createdAt: v.number(),
       finishedAt: v.union(v.number(), v.null()),
+      vsComputer: v.boolean(),
     }),
     players: v.array(
       v.object({
@@ -823,6 +944,7 @@ const roomBundleValidator = v.union(
         finishRank: v.union(v.number(), v.null()),
         isMe: v.boolean(),
         isHost: v.boolean(),
+        isBot: v.boolean(),
       }),
     ),
     tokens: v.array(

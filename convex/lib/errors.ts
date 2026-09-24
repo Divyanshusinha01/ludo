@@ -22,6 +22,8 @@ export const GameError = {
   invalidCode: "Invalid room code",
   invalidName: "Enter a valid name",
   invalidDice: "Invalid dice state",
+  vsComputerOnly: "This game is vs computer only",
+  invalidBotCount: "Choose 1 to 3 computer opponents",
 } as const;
 
 export type GameErrorMessage = (typeof GameError)[keyof typeof GameError];
