@@ -1,6 +1,7 @@
 import { internalMutation, MutationCtx } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { buildFinalRankings, Color } from "./lib/ludo";
+import { logEvent } from "./lib/log";
 
 /** Mark away if no heartbeat within this window. */
 const STALE_MS = 45_000;
@@ -145,6 +146,7 @@ export const tick = internalMutation({
 });
 
 async function deleteRoomCascade(ctx: MutationCtx, roomId: Id<"rooms">) {
+  const room = await ctx.db.get(roomId);
   const players = await ctx.db
     .query("players")
     .withIndex("by_room", (q) => q.eq("roomId", roomId))
@@ -158,4 +160,10 @@ async function deleteRoomCascade(ctx: MutationCtx, roomId: Id<"rooms">) {
   for (const t of tokens) await ctx.db.delete(t._id);
 
   await ctx.db.delete(roomId);
+  if (room) {
+    logEvent("room_cleaned", {
+      roomCode: room.code,
+      status: room.status,
+    });
+  }
 }

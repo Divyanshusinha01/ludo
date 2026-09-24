@@ -13,7 +13,17 @@ import {
   pickNextColor,
   TURN_TIMEOUT_MS,
 } from "./lib/ludo";
-import { assertValidClientId, CREATE_RATE_WINDOW_MS, JOIN_RATE_WINDOW_MS, MAX_JOINS_PER_WINDOW } from "./lib/session";
+import { GameError, fail } from "./lib/errors";
+import { logEvent } from "./lib/log";
+import {
+  assertValidClientId,
+  assertValidRoomCode,
+  CREATE_RATE_WINDOW_MS,
+  HEARTBEAT_MIN_INTERVAL_MS,
+  JOIN_RATE_WINDOW_MS,
+  MAX_JOINS_PER_WINDOW,
+  sanitizePlayerName,
+} from "./lib/session";
 import { colorValidator } from "./schema";
 
 async function uniqueCode(ctx: MutationCtx): Promise<string> {
@@ -121,7 +131,7 @@ async function requirePlayer(
       q.eq("roomId", roomId).eq("clientId", clientId),
     )
     .unique();
-  if (!player) throw new Error("Not in this room");
+  if (!player) fail(GameError.notInRoom);
   return player;
 }
 
@@ -188,14 +198,22 @@ async function resetBoard(
   });
 }
 
+const joinResultValidator = v.object({
+  roomId: v.id("rooms"),
+  code: v.string(),
+  color: colorValidator,
+  reconnected: v.optional(v.boolean()),
+});
+
 export const createRoom = mutation({
   args: {
     clientId: v.string(),
     name: v.string(),
   },
+  returns: joinResultValidator,
   handler: async (ctx, args) => {
     const clientId = assertValidClientId(args.clientId);
-    const name = args.name.trim().slice(0, 20) || "Player";
+    const name = sanitizePlayerName(args.name);
     const now = Date.now();
 
     const hosted = await ctx.db
@@ -205,7 +223,7 @@ export const createRoom = mutation({
     const recent = hosted.some(
       (r) => now - r.createdAt < CREATE_RATE_WINDOW_MS,
     );
-    if (recent) throw new Error("Slow down — try again in a moment");
+    if (recent) fail(GameError.rateLimited);
 
     const code = await uniqueCode(ctx);
     const color = COLORS[0]!;
@@ -237,6 +255,7 @@ export const createRoom = mutation({
       eliminated: false,
     });
 
+    logEvent("room_created", { roomCode: code, clientId });
     return { roomId, code, color };
   },
 });
@@ -247,16 +266,17 @@ export const joinRoom = mutation({
     clientId: v.string(),
     name: v.string(),
   },
+  returns: joinResultValidator,
   handler: async (ctx, args) => {
     const clientId = assertValidClientId(args.clientId);
-    const code = args.code.trim().toUpperCase();
-    const name = args.name.trim().slice(0, 20) || "Player";
+    const code = assertValidRoomCode(args.code);
+    const name = sanitizePlayerName(args.name);
     const room = await ctx.db
       .query("rooms")
       .withIndex("by_code", (q) => q.eq("code", code))
       .unique();
 
-    if (!room) throw new Error("Room not found");
+    if (!room) fail(GameError.roomNotFound);
 
     const existing = await ctx.db
       .query("players")
@@ -274,6 +294,11 @@ export const joinRoom = mutation({
         name,
       });
       await ctx.db.patch(room._id, { lastActivityAt: now });
+      logEvent("player_reconnected", {
+        roomCode: room.code,
+        color: existing.color,
+        clientId,
+      });
       return {
         roomId: room._id,
         code: room.code,
@@ -283,7 +308,7 @@ export const joinRoom = mutation({
     }
 
     if (room.status !== "lobby") {
-      throw new Error("Game already started");
+      fail(GameError.gameStarted);
     }
 
     const mySeats = await ctx.db
@@ -294,7 +319,7 @@ export const joinRoom = mutation({
       (p) => now - (p.joinedAt ?? 0) < JOIN_RATE_WINDOW_MS,
     );
     if (recentJoins.length >= MAX_JOINS_PER_WINDOW) {
-      throw new Error("Slow down — try again in a moment");
+      fail(GameError.rateLimited);
     }
 
     const players = await ctx.db
@@ -302,13 +327,13 @@ export const joinRoom = mutation({
       .withIndex("by_room", (q) => q.eq("roomId", room._id))
       .collect();
 
-    if (players.length >= 4) throw new Error("Room is full");
+    if (players.length >= 4) fail(GameError.roomFull);
 
     const seated = (room.seatedColors ?? seatedFromPlayers(players)) as Color[];
-    if (seated.length >= 4) throw new Error("Room is full");
+    if (seated.length >= 4) fail(GameError.roomFull);
 
     const color = pickNextColor(seated);
-    if (!color) throw new Error("No colour available");
+    if (!color) fail(GameError.roomFull);
 
     const nextSeated = [...seated, color];
     // OCC lock: concurrent joins both patch seatedColors; one retries.
@@ -348,9 +373,10 @@ export const joinRoom = mutation({
             .collect(),
         ),
       });
-      throw new Error("Could not join — try again");
+      fail(GameError.rateLimited);
     }
 
+    logEvent("player_joined", { roomCode: room.code, color, clientId });
     return { roomId: room._id, code: room.code, color, reconnected: false };
   },
 });
@@ -360,6 +386,7 @@ export const heartbeat = mutation({
     roomId: v.id("rooms"),
     clientId: v.string(),
   },
+  returns: v.null(),
   handler: async (ctx, args) => {
     const clientId = assertValidClientId(args.clientId);
     const player = await ctx.db
@@ -368,11 +395,15 @@ export const heartbeat = mutation({
         q.eq("roomId", args.roomId).eq("clientId", clientId),
       )
       .unique();
-    if (!player) return;
+    if (!player) return null;
+    const now = Date.now();
+    // Soft rate limit — ignore floods without erroring.
+    if (now - player.lastSeenAt < HEARTBEAT_MIN_INTERVAL_MS) return null;
     await ctx.db.patch(player._id, {
       connected: true,
-      lastSeenAt: Date.now(),
+      lastSeenAt: now,
     });
+    return null;
   },
 });
 
@@ -381,12 +412,13 @@ export const markDisconnected = mutation({
     roomId: v.id("rooms"),
     clientId: v.string(),
   },
+  returns: v.null(),
   handler: async (ctx, args) => {
     let clientId: string;
     try {
       clientId = assertValidClientId(args.clientId);
     } catch {
-      return;
+      return null;
     }
     const player = await ctx.db
       .query("players")
@@ -394,9 +426,18 @@ export const markDisconnected = mutation({
         q.eq("roomId", args.roomId).eq("clientId", clientId),
       )
       .unique();
-    if (!player) return;
+    if (!player) return null;
     await ctx.db.patch(player._id, { connected: false });
+    logEvent("player_disconnected", {
+      color: player.color,
+      clientId,
+    });
+    return null;
   },
+});
+
+const leaveResultValidator = v.object({
+  emptied: v.boolean(),
 });
 
 export const leaveRoom = mutation({
@@ -404,6 +445,7 @@ export const leaveRoom = mutation({
     roomId: v.id("rooms"),
     clientId: v.string(),
   },
+  returns: leaveResultValidator,
   handler: async (ctx, args) => {
     const clientId = assertValidClientId(args.clientId);
     const room = await ctx.db.get(args.roomId);
@@ -418,6 +460,12 @@ export const leaveRoom = mutation({
     if (!player) return { emptied: false };
 
     const now = Date.now();
+    logEvent("player_left", {
+      roomCode: room.code,
+      color: player.color,
+      status: room.status,
+      clientId,
+    });
 
     if (room.status === "playing") {
       // Forfeit: keep the seat so final rankings can show their name last.
@@ -503,6 +551,11 @@ export const leaveRoom = mutation({
         patches.rankings = rankings;
         patches.lastEvent = `${sole.name} wins — ${player.name} left`;
         await ctx.db.patch(args.roomId, patches);
+        logEvent("game_finished", {
+          roomCode: room.code,
+          winner: sole.color,
+          reason: "forfeit",
+        });
         return { emptied: false };
       }
 
@@ -579,15 +632,16 @@ export const kickPlayer = mutation({
     clientId: v.string(),
     targetColor: colorValidator,
   },
+  returns: v.null(),
   handler: async (ctx, args) => {
     const clientId = assertValidClientId(args.clientId);
     const room = await ctx.db.get(args.roomId);
-    if (!room) throw new Error("Room not found");
+    if (!room) fail(GameError.roomNotFound);
     if (room.hostClientId !== clientId) {
-      throw new Error("Only the host can kick");
+      fail(GameError.onlyHost);
     }
     if (room.status !== "lobby") {
-      throw new Error("Can only kick in lobby");
+      fail(GameError.gameStarted);
     }
 
     const target = await ctx.db
@@ -596,9 +650,9 @@ export const kickPlayer = mutation({
         q.eq("roomId", args.roomId).eq("color", args.targetColor),
       )
       .unique();
-    if (!target) throw new Error("Player not found");
+    if (!target) fail(GameError.notInRoom);
     if (target.clientId === clientId) {
-      throw new Error("Host cannot kick themselves");
+      fail(GameError.onlyHost);
     }
 
     await ctx.db.delete(target._id);
@@ -611,6 +665,12 @@ export const kickPlayer = mutation({
       lastActivityAt: Date.now(),
       lastEvent: `${target.name} was removed`,
     });
+    logEvent("player_kicked", {
+      roomCode: room.code,
+      color: target.color,
+      clientId,
+    });
+    return null;
   },
 });
 
@@ -619,14 +679,15 @@ export const startGame = mutation({
     roomId: v.id("rooms"),
     clientId: v.string(),
   },
+  returns: v.null(),
   handler: async (ctx, args) => {
     const clientId = assertValidClientId(args.clientId);
     const room = await ctx.db.get(args.roomId);
-    if (!room) throw new Error("Room not found");
+    if (!room) fail(GameError.roomNotFound);
     if (room.hostClientId !== clientId) {
-      throw new Error("Only the host can start");
+      fail(GameError.onlyHost);
     }
-    if (room.status !== "lobby") throw new Error("Already started");
+    if (room.status !== "lobby") fail(GameError.gameStarted);
 
     const players = await ctx.db
       .query("players")
@@ -634,10 +695,10 @@ export const startGame = mutation({
       .collect();
 
     if (players.length < 2) {
-      throw new Error("Need at least 2 players to start");
+      fail(GameError.needPlayers);
     }
     if (players.length > 4) {
-      throw new Error("Too many players");
+      fail(GameError.roomFull);
     }
 
     const activeColors = seatedFromPlayers(players);
@@ -650,6 +711,12 @@ export const startGame = mutation({
       now,
     );
     await ctx.db.patch(args.roomId, { seatedColors: activeColors });
+    logEvent("game_started", {
+      roomCode: room.code,
+      players: players.length,
+      clientId,
+    });
+    return null;
   },
 });
 
@@ -658,15 +725,16 @@ export const rematch = mutation({
     roomId: v.id("rooms"),
     clientId: v.string(),
   },
+  returns: v.null(),
   handler: async (ctx, args) => {
     const clientId = assertValidClientId(args.clientId);
     const room = await ctx.db.get(args.roomId);
-    if (!room) throw new Error("Room not found");
+    if (!room) fail(GameError.roomNotFound);
     if (room.status !== "finished") {
-      throw new Error("Game is not finished");
+      fail(GameError.notFinished);
     }
     if (room.hostClientId !== clientId) {
-      throw new Error("Only the host can start a rematch");
+      fail(GameError.onlyHost);
     }
     await requirePlayer(ctx, args.roomId, clientId);
 
@@ -698,7 +766,7 @@ export const rematch = mutation({
       .withIndex("by_room", (q) => q.eq("roomId", args.roomId))
       .collect();
     if (remaining.length < 2) {
-      throw new Error("Need at least 2 players for a rematch");
+      fail(GameError.needPlayers);
     }
 
     const activeColors = seatedFromPlayers(remaining);
@@ -710,23 +778,98 @@ export const rematch = mutation({
       now,
     );
     await ctx.db.patch(args.roomId, { seatedColors: activeColors });
+    logEvent("game_started", {
+      roomCode: room.code,
+      players: remaining.length,
+      rematch: true,
+      clientId,
+    });
+    return null;
   },
 });
+
+const roomBundleValidator = v.union(
+  v.object({
+    room: v.object({
+      _id: v.id("rooms"),
+      code: v.string(),
+      status: v.union(
+        v.literal("lobby"),
+        v.literal("playing"),
+        v.literal("finished"),
+      ),
+      currentTurn: colorValidator,
+      diceValue: v.union(v.number(), v.null()),
+      diceRolled: v.boolean(),
+      consecutiveSixes: v.number(),
+      turnId: v.number(),
+      turnStartedAt: v.union(v.number(), v.null()),
+      turnTimeoutMs: v.number(),
+      winner: v.union(colorValidator, v.null()),
+      rankings: v.array(colorValidator),
+      lastEvent: v.optional(v.string()),
+      createdAt: v.number(),
+      finishedAt: v.union(v.number(), v.null()),
+    }),
+    players: v.array(
+      v.object({
+        _id: v.id("players"),
+        name: v.string(),
+        color: colorValidator,
+        connected: v.boolean(),
+        lives: v.number(),
+        eliminated: v.boolean(),
+        finishRank: v.union(v.number(), v.null()),
+        isMe: v.boolean(),
+        isHost: v.boolean(),
+      }),
+    ),
+    tokens: v.array(
+      v.object({
+        _id: v.id("tokens"),
+        color: colorValidator,
+        index: v.number(),
+        steps: v.number(),
+      }),
+    ),
+    me: v.union(
+      v.object({
+        color: colorValidator,
+        name: v.string(),
+        isHost: v.boolean(),
+      }),
+      v.null(),
+    ),
+  }),
+  v.null(),
+);
 
 export const getRoomByCode = query({
   args: {
     code: v.string(),
     clientId: v.optional(v.string()),
   },
+  returns: roomBundleValidator,
   handler: async (ctx, args) => {
+    let code: string;
+    try {
+      code = assertValidRoomCode(args.code);
+    } catch {
+      return null;
+    }
     const room = await ctx.db
       .query("rooms")
-      .withIndex("by_code", (q) =>
-        q.eq("code", args.code.trim().toUpperCase()),
-      )
+      .withIndex("by_code", (q) => q.eq("code", code))
       .unique();
     if (!room) return null;
-    const session = args.clientId?.trim() || null;
+    let session: string | null = null;
+    if (args.clientId) {
+      try {
+        session = assertValidClientId(args.clientId);
+      } catch {
+        session = null;
+      }
+    }
     return loadRoomBundle(ctx, room, session);
   },
 });
@@ -736,10 +879,18 @@ export const getRoom = query({
     roomId: v.id("rooms"),
     clientId: v.optional(v.string()),
   },
+  returns: roomBundleValidator,
   handler: async (ctx, args) => {
     const room = await ctx.db.get(args.roomId);
     if (!room) return null;
-    const session = args.clientId?.trim() || null;
+    let session: string | null = null;
+    if (args.clientId) {
+      try {
+        session = assertValidClientId(args.clientId);
+      } catch {
+        session = null;
+      }
+    }
     return loadRoomBundle(ctx, room, session);
   },
 });

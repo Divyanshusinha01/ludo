@@ -73,6 +73,8 @@ export default defineSchema({
     finishRank: v.optional(v.number()),
     /** Set on first seat insert — used for join rate-limiting. */
     joinedAt: v.optional(v.number()),
+    /** Last gameplay/presence action — used for action rate-limiting. */
+    lastActionAt: v.optional(v.number()),
   })
     .index("by_room", ["roomId"])
     .index("by_room_client", ["roomId", "clientId"])

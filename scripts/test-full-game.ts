@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api";
 import { FINISHED_STEPS } from "../convex/lib/ludo";
@@ -22,40 +23,45 @@ function assert(cond: unknown, msg: string) {
   if (!cond) throw new Error(msg);
 }
 
+function sid() {
+  return randomUUID();
+}
+
 /**
  * Play until a winner by repeatedly rolling and moving.
  * Caps iterations so CI does not hang forever.
  */
 async function playToCompletion(client: ConvexHttpClient) {
+  const ids = [sid(), sid(), sid(), sid()];
   const create = await client.mutation(api.rooms.createRoom, {
-    clientId: "c0",
+    clientId: ids[0]!,
     name: "P0",
   });
   const { code, roomId } = create;
   for (let i = 1; i < 4; i++) {
     await client.mutation(api.rooms.joinRoom, {
       code,
-      clientId: `c${i}`,
+      clientId: ids[i]!,
       name: `P${i}`,
     });
   }
   await client.mutation(api.rooms.startGame, {
     roomId,
-    clientId: "c0",
+    clientId: ids[0]!,
   });
 
   // Opposite seating: 2nd joiner gets yellow, then green, then blue
   const colorToClient: Record<string, string> = {
-    red: "c0",
-    yellow: "c1",
-    green: "c2",
-    blue: "c3",
+    red: ids[0]!,
+    yellow: ids[1]!,
+    green: ids[2]!,
+    blue: ids[3]!,
   };
 
   for (let i = 0; i < 2500; i++) {
     const state = await client.query(api.rooms.getRoom, {
       roomId,
-      clientId: "c0",
+      clientId: ids[0]!,
     });
     assert(state, "state");
     if (state!.room.status === "finished") {
@@ -70,10 +76,12 @@ async function playToCompletion(client: ConvexHttpClient) {
 
     const turn = state!.room.currentTurn;
     const clientId = colorToClient[turn]!;
+    const turnId = state!.room.turnId;
     if (!state!.room.diceRolled) {
       const roll = await client.mutation(api.game.rollDice, {
         roomId,
         clientId,
+        turnId,
       });
       if (roll.skipped || !roll.legalMoves?.length) continue;
     }
@@ -87,6 +95,7 @@ async function playToCompletion(client: ConvexHttpClient) {
       roomId,
       clientId,
       tokenIndex: legal[0]!,
+      turnId,
     });
   }
 

@@ -26,7 +26,13 @@ import {
   tryMoveSteps,
   TURN_TIMEOUT_MS,
 } from "./lib/ludo";
-import { assertValidClientId } from "./lib/session";
+import { GameError, fail } from "./lib/errors";
+import { logEvent } from "./lib/log";
+import {
+  ACTION_MIN_INTERVAL_MS,
+  assertActionInterval,
+  assertValidClientId,
+} from "./lib/session";
 
 async function loadTokens(
   ctx: MutationCtx | QueryCtx,
@@ -142,31 +148,141 @@ async function maybeFinishSoleSurvivor(
     lastActivityAt: now,
     lastEvent: `${sole.name} wins — others eliminated`,
   });
+  logEvent("game_finished", {
+    roomCode: room.code,
+    winner: sole.color,
+    reason: "sole_survivor",
+  });
   return true;
 }
+
+/** Apply timeout life loss / elimination / turn advance. Shared by cron + eager expiry. */
+async function applyTurnTimeout(
+  ctx: MutationCtx,
+  room: Doc<"rooms">,
+): Promise<void> {
+  const players = await seatedPlayers(ctx, room._id);
+  const current = players.find((p) => p.color === room.currentTurn);
+  if (!current || current.eliminated) return;
+
+  const lives = (current.lives ?? MAX_TIMEOUT_LIVES) - 1;
+
+  logEvent("timeout", {
+    roomCode: room.code,
+    color: current.color,
+    livesLeft: Math.max(0, lives),
+    turnId: room.turnId ?? 0,
+  });
+
+  if (lives <= 0) {
+    const place = playableColors(players).length;
+    await ctx.db.patch(current._id, {
+      lives: 0,
+      eliminated: true,
+      finishRank: place,
+    });
+    await returnTokensToYard(ctx, room._id, current.color as Color);
+
+    const refreshed = await seatedPlayers(ctx, room._id);
+
+    if (await maybeFinishSoleSurvivor(ctx, room, refreshed)) return;
+
+    const seated = playableColors(refreshed);
+    if (seated.length < 2) return;
+
+    const next = nextColorAmong(room.currentTurn, seated);
+    await beginTurn(ctx, room, next, {
+      lastEvent: `${current.name} timed out — eliminated (0 lives)`,
+    });
+    return;
+  }
+
+  await ctx.db.patch(current._id, { lives });
+  const seated = playableColors(players);
+  const next = nextColorAmong(room.currentTurn, seated);
+  await beginTurn(ctx, room, next, {
+    lastEvent: `${current.name} timed out — ${lives} ${lives === 1 ? "life" : "lives"} left`,
+  });
+}
+
+/**
+ * Server-authoritative turn clock. If expired, apply timeout and reject the action.
+ * Prevents acting in the window after expiry but before the scheduled job runs.
+ */
+async function assertTurnNotExpired(
+  ctx: MutationCtx,
+  room: Doc<"rooms">,
+): Promise<void> {
+  const started = room.turnStartedAt;
+  if (started === undefined) return;
+  if (Date.now() <= started + TURN_TIMEOUT_MS) return;
+  await applyTurnTimeout(ctx, room);
+  fail(GameError.turnExpired);
+}
+
+function assertFreshTurn(room: Doc<"rooms">, expectedTurnId: number) {
+  if ((room.turnId ?? 0) !== expectedTurnId) {
+    fail(GameError.staleAction);
+  }
+}
+
+async function requireActivePlayer(
+  ctx: MutationCtx,
+  roomId: Id<"rooms">,
+  clientId: string,
+  room: Doc<"rooms">,
+) {
+  const player = await ctx.db
+    .query("players")
+    .withIndex("by_room_client", (q) =>
+      q.eq("roomId", roomId).eq("clientId", clientId),
+    )
+    .unique();
+
+  if (!player) fail(GameError.notInRoom);
+  if (player.eliminated) fail(GameError.eliminated);
+  if (player.color !== room.currentTurn) fail(GameError.notYourTurn);
+  return player;
+}
+
+const rollResultValidator = v.object({
+  value: v.number(),
+  skipped: v.boolean(),
+  legalMoves: v.array(v.number()),
+  threeSixes: v.optional(v.boolean()),
+  rollAgain: v.optional(v.boolean()),
+  returnedToken: v.optional(v.union(v.number(), v.null())),
+});
 
 export const rollDice = mutation({
   args: {
     roomId: v.id("rooms"),
     clientId: v.string(),
+    /** Client's view of turnId — rejects stale tabs. */
+    turnId: v.number(),
   },
+  returns: rollResultValidator,
   handler: async (ctx, args) => {
     const clientId = assertValidClientId(args.clientId);
     const room = await ctx.db.get(args.roomId);
-    if (!room) throw new Error("Room not found");
-    if (room.status !== "playing") throw new Error("Game not in progress");
-    if (room.diceRolled) throw new Error("Dice already rolled");
+    if (!room) fail(GameError.roomNotFound);
+    if (room.status !== "playing") fail(GameError.gameNotPlaying);
 
-    const player = await ctx.db
-      .query("players")
-      .withIndex("by_room_client", (q) =>
-        q.eq("roomId", args.roomId).eq("clientId", clientId),
-      )
-      .unique();
+    assertFreshTurn(room, args.turnId);
 
-    if (!player) throw new Error("Not in this room");
-    if (player.eliminated) throw new Error("You are eliminated");
-    if (player.color !== room.currentTurn) throw new Error("Not your turn");
+    if (room.diceRolled) fail(GameError.diceAlreadyRolled);
+
+    const player = await requireActivePlayer(ctx, args.roomId, clientId, room);
+    await assertTurnNotExpired(ctx, room);
+
+    // Re-read after possible timeout (assertTurnNotExpired throws if expired).
+    const fresh = (await ctx.db.get(args.roomId))!;
+    if (fresh.diceRolled) fail(GameError.diceAlreadyRolled);
+    // Re-check seat against post-timeout state (should have thrown already).
+    if (player.color !== fresh.currentTurn) fail(GameError.notYourTurn);
+
+    const now = assertActionInterval(player.lastActionAt, ACTION_MIN_INTERVAL_MS);
+    await ctx.db.patch(player._id, { lastActionAt: now });
 
     const players = await seatedPlayers(ctx, args.roomId);
     const seated = playableColors(players);
@@ -175,16 +291,24 @@ export const rollDice = mutation({
     const legalMoves = getLegalMoves(tokens, player.color, value);
     const decision = decideRollOutcome(
       value,
-      room.consecutiveSixes,
+      fresh.consecutiveSixes,
       legalMoves.length,
     );
-    const now = Date.now();
+
+    logEvent("dice_rolled", {
+      roomCode: fresh.code,
+      color: player.color,
+      value,
+      decision: decision.kind,
+      turnId: fresh.turnId ?? 0,
+      clientId,
+    });
 
     if (decision.kind === "three_sixes") {
       const penaltyIndex = pickThreeSixesPenaltyToken(
         tokens,
         player.color,
-        room.lastMovedTokenIndex ?? null,
+        fresh.lastMovedTokenIndex ?? null,
       );
       if (penaltyIndex !== null) {
         const tokenList = await ctx.db
@@ -197,13 +321,13 @@ export const rollDice = mutation({
         if (doc) await ctx.db.patch(doc._id, { steps: -1 });
       }
 
-      const next = nextColorAmong(room.currentTurn, seated);
+      const next = nextColorAmong(fresh.currentTurn, seated);
       const event =
         penaltyIndex !== null
           ? `${player.color} rolled three 6s — token returned home, turn skipped`
           : `${player.color} rolled three 6s — turn skipped`;
 
-      await beginTurn(ctx, room, next, {
+      await beginTurn(ctx, fresh, next, {
         diceValue: value,
         lastEvent: event,
       });
@@ -228,8 +352,8 @@ export const rollDice = mutation({
     }
 
     if (decision.kind === "no_moves") {
-      const next = nextColorAmong(room.currentTurn, seated);
-      await beginTurn(ctx, room, next, {
+      const next = nextColorAmong(fresh.currentTurn, seated);
+      await beginTurn(ctx, fresh, next, {
         diceValue: value,
         lastEvent: `${player.color} rolled ${value} — no moves`,
       });
@@ -248,47 +372,70 @@ export const rollDice = mutation({
   },
 });
 
+const moveResultValidator = v.object({
+  won: v.boolean(),
+  captured: v.boolean(),
+  reachedHome: v.boolean(),
+  leftYard: v.boolean(),
+  fromSteps: v.number(),
+  toSteps: v.number(),
+  extraTurn: v.optional(v.boolean()),
+  capturedColor: v.optional(v.union(v.string(), v.null())),
+  capturedIndex: v.optional(v.union(v.number(), v.null())),
+});
+
 export const moveToken = mutation({
   args: {
     roomId: v.id("rooms"),
     clientId: v.string(),
     tokenIndex: v.number(),
+    /** Client's view of turnId — rejects stale tabs. */
+    turnId: v.number(),
   },
+  returns: moveResultValidator,
   handler: async (ctx, args) => {
     const clientId = assertValidClientId(args.clientId);
     const room = await ctx.db.get(args.roomId);
-    if (!room) throw new Error("Room not found");
-    if (room.status !== "playing") throw new Error("Game not in progress");
-    if (!room.diceRolled || room.diceValue === null) {
-      throw new Error("Roll the dice first");
-    }
-    const dice = room.diceValue;
-    if (!Number.isInteger(dice) || dice < 1 || dice > 6) {
-      throw new Error("Invalid dice state");
-    }
+    if (!room) fail(GameError.roomNotFound);
+    if (room.status !== "playing") fail(GameError.gameNotPlaying);
+
+    assertFreshTurn(room, args.turnId);
+
     if (
       !Number.isInteger(args.tokenIndex) ||
       args.tokenIndex < 0 ||
       args.tokenIndex > 3
     ) {
-      throw new Error("Illegal move");
+      fail(GameError.illegalMove);
     }
 
-    const player = await ctx.db
-      .query("players")
-      .withIndex("by_room_client", (q) =>
-        q.eq("roomId", args.roomId).eq("clientId", clientId),
-      )
-      .unique();
+    const player = await requireActivePlayer(ctx, args.roomId, clientId, room);
+    await assertTurnNotExpired(ctx, room);
 
-    if (!player) throw new Error("Not in this room");
-    if (player.eliminated) throw new Error("You are eliminated");
-    if (player.color !== room.currentTurn) throw new Error("Not your turn");
+    const fresh = (await ctx.db.get(args.roomId))!;
+    if (player.color !== fresh.currentTurn) fail(GameError.notYourTurn);
+    if (!fresh.diceRolled || fresh.diceValue === null) {
+      fail(GameError.rollFirst);
+    }
+    const dice = fresh.diceValue;
+    if (!Number.isInteger(dice) || dice < 1 || dice > 6) {
+      fail(GameError.invalidDice);
+    }
+
+    const now = assertActionInterval(player.lastActionAt, ACTION_MIN_INTERVAL_MS);
+    await ctx.db.patch(player._id, { lastActionAt: now });
 
     const tokens = await loadTokens(ctx, args.roomId);
     const legal = getLegalMoves(tokens, player.color, dice);
     if (!legal.includes(args.tokenIndex)) {
-      throw new Error("Illegal move");
+      logEvent("rejected_move", {
+        roomCode: fresh.code,
+        color: player.color,
+        tokenIndex: args.tokenIndex,
+        dice,
+        clientId,
+      });
+      fail(GameError.illegalMove);
     }
 
     const tokenList = await ctx.db
@@ -298,11 +445,11 @@ export const moveToken = mutation({
       )
       .collect();
     const tokenDoc = tokenList.find((t) => t.index === args.tokenIndex);
-    if (!tokenDoc) throw new Error("Token not found");
+    if (!tokenDoc) fail(GameError.illegalMove);
 
     const fromSteps = tokenDoc.steps;
     const dest = tryMoveSteps(tokenDoc.steps, dice);
-    if (dest === null) throw new Error("Illegal move");
+    if (dest === null) fail(GameError.illegalMove);
 
     const captured = findCaptureTarget(tokens, player.color, dest);
     if (captured) {
@@ -316,9 +463,21 @@ export const moveToken = mutation({
       if (capDoc) {
         await ctx.db.patch(capDoc._id, { steps: -1 });
       }
+      logEvent("capture", {
+        roomCode: fresh.code,
+        attacker: player.color,
+        victim: captured.color,
+        clientId,
+      });
     }
 
     await ctx.db.patch(tokenDoc._id, { steps: dest });
+
+    // Clear dice immediately so concurrent move requests cannot reuse this roll.
+    await ctx.db.patch(args.roomId, {
+      diceRolled: false,
+      lastActivityAt: now,
+    });
 
     const updatedTokens = tokens.map((t) =>
       t.color === player.color && t.index === args.tokenIndex
@@ -330,13 +489,22 @@ export const moveToken = mutation({
           : t,
     );
 
-    const now = Date.now();
     const reachedHome = dest === FINISHED_STEPS;
     const leftYard = fromSteps === -1;
 
+    logEvent("token_moved", {
+      roomCode: fresh.code,
+      color: player.color,
+      tokenIndex: args.tokenIndex,
+      fromSteps,
+      toSteps: dest,
+      dice,
+      clientId,
+    });
+
     if (hasWon(updatedTokens, player.color)) {
       const players = await seatedPlayers(ctx, args.roomId);
-      const rankings = [...(room.rankings ?? []), player.color as Color];
+      const rankings = [...(fresh.rankings ?? []), player.color as Color];
       await ctx.db.patch(player._id, { finishRank: rankings.length });
       await ctx.db.patch(args.roomId, {
         status: "finished",
@@ -349,6 +517,11 @@ export const moveToken = mutation({
         finishedAt: now,
         lastActivityAt: now,
         lastEvent: `${player.name} (${player.color}) wins!`,
+      });
+      logEvent("game_finished", {
+        roomCode: fresh.code,
+        winner: player.color,
+        reason: "all_home",
       });
       return {
         won: true,
@@ -365,7 +538,7 @@ export const moveToken = mutation({
     const extraTurn = gainsExtraTurn(dice, !!captured, reachedHome);
 
     if (extraTurn) {
-      const turnId = (room.turnId ?? 0) + 1;
+      const turnId = (fresh.turnId ?? 0) + 1;
       const reason = reachedHome
         ? `${player.color} reached home — roll again`
         : captured
@@ -375,9 +548,8 @@ export const moveToken = mutation({
       await ctx.db.patch(args.roomId, {
         diceRolled: false,
         diceValue: dice,
-        consecutiveSixes: dice === 6 ? room.consecutiveSixes : 0,
-        lastMovedTokenIndex:
-          dice === 6 ? args.tokenIndex : null,
+        consecutiveSixes: dice === 6 ? fresh.consecutiveSixes : 0,
+        lastMovedTokenIndex: dice === 6 ? args.tokenIndex : null,
         turnId,
         turnStartedAt: now,
         lastActivityAt: now,
@@ -385,8 +557,8 @@ export const moveToken = mutation({
       });
       await scheduleTurnTimeout(ctx, args.roomId, turnId);
     } else {
-      const next = nextColorAmong(room.currentTurn, seated);
-      await beginTurn(ctx, room, next, {
+      const next = nextColorAmong(fresh.currentTurn, seated);
+      await beginTurn(ctx, fresh, next, {
         diceValue: dice,
         lastEvent: `${player.color} moved`,
       });
@@ -412,55 +584,35 @@ export const handleTurnTimeout = internalMutation({
     roomId: v.id("rooms"),
     turnId: v.number(),
   },
+  returns: v.null(),
   handler: async (ctx, args) => {
     const room = await ctx.db.get(args.roomId);
-    if (!room || room.status !== "playing") return;
-    if ((room.turnId ?? 0) !== args.turnId) return;
+    if (!room || room.status !== "playing") return null;
+    if ((room.turnId ?? 0) !== args.turnId) return null;
 
-    const players = await seatedPlayers(ctx, args.roomId);
-    const current = players.find((p) => p.color === room.currentTurn);
-    if (!current || current.eliminated) return;
+    // Idempotent: only fire if the clock has actually elapsed.
+    const started = room.turnStartedAt ?? 0;
+    if (Date.now() < started + TURN_TIMEOUT_MS - 50) return null;
 
-    const lives = (current.lives ?? MAX_TIMEOUT_LIVES) - 1;
-
-    if (lives <= 0) {
-      // Place = number still playable including this player (first out = last place).
-      const place = playableColors(players).length;
-      await ctx.db.patch(current._id, {
-        lives: 0,
-        eliminated: true,
-        finishRank: place,
-      });
-      await returnTokensToYard(ctx, args.roomId, current.color as Color);
-
-      const refreshed = await seatedPlayers(ctx, args.roomId);
-
-      if (await maybeFinishSoleSurvivor(ctx, room, refreshed)) return;
-
-      const seated = playableColors(refreshed);
-      if (seated.length < 2) return;
-
-      const next = nextColorAmong(room.currentTurn, seated);
-      await beginTurn(ctx, room, next, {
-        lastEvent: `${current.name} timed out — eliminated (0 lives)`,
-      });
-      return;
-    }
-
-    await ctx.db.patch(current._id, { lives });
-    const seated = playableColors(players);
-    const next = nextColorAmong(room.currentTurn, seated);
-    await beginTurn(ctx, room, next, {
-      lastEvent: `${current.name} timed out — ${lives} ${lives === 1 ? "life" : "lives"} left`,
-    });
+    await applyTurnTimeout(ctx, room);
+    return null;
   },
 });
+
 export const getLegalTokenIndexes = query({
   args: {
     roomId: v.id("rooms"),
     clientId: v.string(),
   },
+  returns: v.array(v.number()),
   handler: async (ctx, args) => {
+    let clientId: string;
+    try {
+      clientId = assertValidClientId(args.clientId);
+    } catch {
+      return [];
+    }
+
     const room = await ctx.db.get(args.roomId);
     if (
       !room ||
@@ -474,7 +626,7 @@ export const getLegalTokenIndexes = query({
     const player = await ctx.db
       .query("players")
       .withIndex("by_room_client", (q) =>
-        q.eq("roomId", args.roomId).eq("clientId", args.clientId),
+        q.eq("roomId", args.roomId).eq("clientId", clientId),
       )
       .unique();
 

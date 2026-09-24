@@ -106,6 +106,22 @@ export function useTokenAnimation(serverTokens: AnimToken[]) {
       return;
     }
 
+    // Reconnect / multi-turn backlog: snap to authoritative state instead of
+    // replaying a long or ambiguous animation chain.
+    const shouldSnap =
+      jobs.length > 2 ||
+      jobs.some(
+        (j) =>
+          j.kind === "move" && stepsAlongPath(j.from, j.to).length > 6,
+      );
+    if (shouldSnap) {
+      prevRef.current = serverTokens;
+      setDisplay(serverTokens);
+      setAnimating(false);
+      setFx({});
+      return;
+    }
+
     const snapshot = serverTokens;
     chainRef.current = chainRef.current.then(async () => {
       setAnimating(true);

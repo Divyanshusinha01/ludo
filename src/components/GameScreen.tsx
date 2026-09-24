@@ -73,6 +73,7 @@ export function GameScreen({ roomId, clientId }: Props) {
   const lastTurnId = useRef<number | null>(null);
   const winPlayed = useRef(false);
   const rollLock = useRef(false);
+  const moveLock = useRef(false);
 
   useRoomPresence(roomId, clientId);
 
@@ -189,7 +190,11 @@ export function GameScreen({ roomId, clientId }: Props) {
     haptic("roll");
     playSound("roll");
     try {
-      const result = await rollDice({ roomId, clientId });
+      const result = await rollDice({
+        roomId,
+        clientId,
+        turnId: room.turnId,
+      });
       if (result.threeSixes) playSound("threeSixes");
       setReveal(true);
       setTimeout(() => setReveal(false), 700);
@@ -204,11 +209,17 @@ export function GameScreen({ roomId, clientId }: Props) {
   }
 
   async function onSelectToken(tokenIndex: number) {
-    if (animating || !myTurn || !room.diceRolled) return;
+    if (animating || moveLock.current || !myTurn || !room.diceRolled) return;
+    moveLock.current = true;
     setError(null);
     haptic("tap");
     try {
-      const result = await moveToken({ roomId, clientId, tokenIndex });
+      const result = await moveToken({
+        roomId,
+        clientId,
+        tokenIndex,
+        turnId: room.turnId,
+      });
       if (result.won) {
         /* win sound via effect */
       } else if (result.captured) {
@@ -216,6 +227,8 @@ export function GameScreen({ roomId, clientId }: Props) {
       }
     } catch (e) {
       setError(formatConvexError(e, "Illegal move"));
+    } finally {
+      moveLock.current = false;
     }
   }
 

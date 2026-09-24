@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api";
 
@@ -21,15 +22,21 @@ function assert(cond: unknown, msg: string) {
   if (!cond) throw new Error(msg);
 }
 
+function sid() {
+  return randomUUID();
+}
+
 async function main() {
   loadEnvLocal();
   const url = process.env.NEXT_PUBLIC_CONVEX_URL;
   if (!url) throw new Error("NEXT_PUBLIC_CONVEX_URL missing");
 
   const client = new ConvexHttpClient(url);
+  const host1 = sid();
+  const p2 = sid();
 
   const create = await client.mutation(api.rooms.createRoom, {
-    clientId: "host-1",
+    clientId: host1,
     name: "Host",
   });
   assert(create.code.length === 6, "room code is 6 chars");
@@ -40,22 +47,34 @@ async function main() {
     (
       await client.mutation(api.rooms.joinRoom, {
         code,
-        clientId: "p2",
+        clientId: p2,
         name: "Yellow",
       })
     ).color === "yellow",
     "p2 opposite house (yellow)",
   );
 
+  // Reject bad session ids
+  let badSession = false;
+  try {
+    await client.mutation(api.rooms.createRoom, {
+      clientId: "not-a-uuid",
+      name: "X",
+    });
+  } catch {
+    badSession = true;
+  }
+  assert(badSession, "invalid session rejected");
+
   // 2-player start should work
   await client.mutation(api.rooms.startGame, {
     roomId,
-    clientId: "host-1",
+    clientId: host1,
   });
 
   let state = await client.query(api.rooms.getRoomByCode, {
     code,
-    clientId: "host-1",
+    clientId: host1,
   });
   assert(state, "room exists");
   assert(state!.room.status === "playing", "2p game started");
@@ -67,17 +86,23 @@ async function main() {
   );
 
   // Fresh 4-player room for remaining checks
+  const h4 = sid();
+  const p2b = sid();
+  const p3 = sid();
+  const p4 = sid();
+  const p5 = sid();
+
   const create4 = await client.mutation(api.rooms.createRoom, {
-    clientId: "h4",
+    clientId: h4,
     name: "Host4",
   });
   const code4 = create4.code;
   const roomId4 = create4.roomId;
   // Join order with opposite seating: yellow, then green, then blue
   for (const [id, name] of [
-    ["p2b", "Yellow"],
-    ["p3", "Green"],
-    ["p4", "Blue"],
+    [p2b, "Yellow"],
+    [p3, "Green"],
+    [p4, "Blue"],
   ] as const) {
     await client.mutation(api.rooms.joinRoom, {
       code: code4,
@@ -90,7 +115,7 @@ async function main() {
   try {
     await client.mutation(api.rooms.joinRoom, {
       code: code4,
-      clientId: "p5",
+      clientId: p5,
       name: "Extra",
     });
   } catch {
@@ -100,7 +125,7 @@ async function main() {
 
   const recon = await client.mutation(api.rooms.joinRoom, {
     code: code4,
-    clientId: "p2b",
+    clientId: p2b,
     name: "Yellow2",
   });
   assert(recon.reconnected === true, "reconnect works");
@@ -108,30 +133,67 @@ async function main() {
 
   await client.mutation(api.rooms.startGame, {
     roomId: roomId4,
-    clientId: "h4",
+    clientId: h4,
   });
+
+  const started = await client.query(api.rooms.getRoom, {
+    roomId: roomId4,
+    clientId: h4,
+  });
+  assert(started, "4p room");
+  const turnId = started!.room.turnId;
 
   let badTurn = false;
   try {
-    await client.mutation(api.game.rollDice, { roomId: roomId4, clientId: "p2b" });
+    await client.mutation(api.game.rollDice, {
+      roomId: roomId4,
+      clientId: p2b,
+      turnId,
+    });
   } catch {
     badTurn = true;
   }
   assert(badTurn, "non-turn player cannot roll");
 
+  let stale = false;
+  try {
+    await client.mutation(api.game.rollDice, {
+      roomId: roomId4,
+      clientId: h4,
+      turnId: turnId - 1,
+    });
+  } catch {
+    stale = true;
+  }
+  assert(stale, "stale turnId rejected");
+
   const roll = await client.mutation(api.game.rollDice, {
     roomId: roomId4,
-    clientId: "h4",
+    clientId: h4,
+    turnId,
   });
   assert(roll.value >= 1 && roll.value <= 6, "dice 1-6");
+
+  let doubleRoll = false;
+  try {
+    await client.mutation(api.game.rollDice, {
+      roomId: roomId4,
+      clientId: h4,
+      turnId,
+    });
+  } catch {
+    doubleRoll = true;
+  }
+  assert(doubleRoll, "double roll rejected");
 
   if (roll.legalMoves?.length) {
     let illegal = false;
     try {
       await client.mutation(api.game.moveToken, {
         roomId: roomId4,
-        clientId: "h4",
+        clientId: h4,
         tokenIndex: 99,
+        turnId,
       });
     } catch {
       illegal = true;
@@ -140,14 +202,15 @@ async function main() {
 
     await client.mutation(api.game.moveToken, {
       roomId: roomId4,
-      clientId: "h4",
+      clientId: h4,
       tokenIndex: roll.legalMoves[0]!,
+      turnId,
     });
   }
 
   state = await client.query(api.rooms.getRoomByCode, {
     code: code4,
-    clientId: "h4",
+    clientId: h4,
   });
   assert(state, "room exists");
   assert(

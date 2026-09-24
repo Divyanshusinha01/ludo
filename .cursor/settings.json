@@ -5,6 +5,9 @@
     },
     "convex": {
       "enabled": true
+    },
+    "vercel": {
+      "enabled": true
     }
   }
 }

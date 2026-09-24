@@ -19,7 +19,8 @@ import {
   absoluteTrackPosition,
   YARD_SIX_WEIGHT,
 } from "../convex/lib/ludo";
-import { assertValidClientId } from "../convex/lib/session";
+import { assertValidClientId, assertValidRoomCode, assertActionInterval } from "../convex/lib/session";
+import { GameError } from "../convex/lib/errors";
 import { normalizeCode } from "../src/lib/player";
 import {
   tokenStackKey,
@@ -196,7 +197,24 @@ describe("session, codes, and board geometry", () => {
     expect(() =>
       assertValidClientId("550e8400-e29b-41d4-a716-446655440000"),
     ).not.toThrow();
-    expect(() => assertValidClientId("not-a-uuid")).toThrow();
+    expect(() => assertValidClientId("not-a-uuid")).toThrow(GameError.invalidSession);
+    expect(() => assertValidClientId("host-1")).toThrow(GameError.invalidSession);
+  });
+
+  it("validates room codes", () => {
+    expect(assertValidRoomCode("ab23cd")).toBe("AB23CD");
+    expect(() => assertValidRoomCode("ABC")).toThrow(GameError.invalidCode);
+    expect(() => assertValidRoomCode("OOOOOO")).toThrow(GameError.invalidCode);
+    expect(() => assertValidRoomCode("AB1ICD")).toThrow(GameError.invalidCode);
+  });
+
+  it("enforces action intervals", () => {
+    const now = 1_000_000;
+    expect(assertActionInterval(undefined, 100, now)).toBe(now);
+    expect(() => assertActionInterval(now - 50, 100, now)).toThrow(
+      GameError.rateLimited,
+    );
+    expect(assertActionInterval(now - 150, 100, now)).toBe(now);
   });
 
   it("normalizes room codes and fans stacked tokens", () => {
