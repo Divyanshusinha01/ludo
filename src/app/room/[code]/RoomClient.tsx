@@ -20,6 +20,7 @@ export function RoomClient({ code }: { code: string }) {
   const clientId = useSessionId();
   const [joinError, setJoinError] = useState<string | null>(null);
   const [retryKey, setRetryKey] = useState(0);
+  const [offline, setOffline] = useState(false);
   const joinAttempted = useRef(false);
   const roomCode = normalizeCode(code);
 
@@ -30,6 +31,17 @@ export function RoomClient({ code }: { code: string }) {
       : "skip",
   );
   const joinRoom = useMutation(api.rooms.joinRoom);
+
+  useEffect(() => {
+    const sync = () => setOffline(!navigator.onLine);
+    sync();
+    window.addEventListener("online", sync);
+    window.addEventListener("offline", sync);
+    return () => {
+      window.removeEventListener("online", sync);
+      window.removeEventListener("offline", sync);
+    };
+  }, []);
 
   const roomStatus = data?.room.status;
   const hasMe = !!data?.me;
@@ -115,6 +127,15 @@ export function RoomClient({ code }: { code: string }) {
 
   if (!hasMe || !data) {
     return <StatusText>Joining room…</StatusText>;
+  }
+
+  if (offline) {
+    return (
+      <div className={styles.center}>
+        <h1>Reconnecting…</h1>
+        <p>Your seat is saved. Waiting for network…</p>
+      </div>
+    );
   }
 
   if (data.room.status === "lobby") {

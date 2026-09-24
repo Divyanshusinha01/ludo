@@ -1,11 +1,9 @@
 import { internalMutation, MutationCtx } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
-import { COLORS, Color, nextColorAmong } from "./lib/ludo";
+import { Color } from "./lib/ludo";
 
 /** Mark away if no heartbeat within this window. */
 const STALE_MS = 45_000;
-/** Skip turn when current player has been away this long. */
-const AFK_SKIP_MS = 60_000;
 const FINISHED_TTL_MS = 6 * 60 * 60 * 1000;
 const LOBBY_TTL_MS = 2 * 60 * 60 * 1000;
 /** Delete playing rooms with no activity this long. */
@@ -119,24 +117,9 @@ export const tick = internalMutation({
 
       const current = refreshed.find((p) => p.color === room.currentTurn);
       if (!current) continue;
-      if (current.connected) continue;
-      if (now - current.lastSeenAt < AFK_SKIP_MS) continue;
-
-      const active = COLORS.filter((c) =>
-        refreshed.some((p) => p.color === c),
-      ) as Color[];
-      if (active.length < 2) continue;
-
-      const next = nextColorAmong(room.currentTurn, active);
-      if (next === room.currentTurn) continue;
-
-      await ctx.db.patch(room._id, {
-        currentTurn: next,
-        diceRolled: false,
-        diceValue: null,
-        consecutiveSixes: 0,
-        lastEvent: `${current.color} away — turn skipped`,
-      });
+      // Turn clock is authoritative via scheduled handleTurnTimeout.
+      // Only mark presence; do not double-skip turns here.
+      void current;
     }
   },
 });

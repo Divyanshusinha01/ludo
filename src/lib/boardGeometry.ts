@@ -92,6 +92,41 @@ export const YARD_SLOTS: Record<Color, Array<[number, number]>> = {
 
 export const CENTRE: [number, number] = [7, 7];
 
+/**
+ * Fixed slots inside each colour's home triangle so finished tokens
+ * never overlap (index 0..3).
+ */
+export const HOME_FINISHED_SLOTS: Record<Color, Array<[number, number]>> = {
+  // Red triangle: left of centre
+  red: [
+    [6.35, 7.15],
+    [6.35, 7.85],
+    [6.85, 7.0],
+    [6.85, 8.0],
+  ],
+  // Green triangle: top of centre
+  green: [
+    [7.15, 6.35],
+    [7.85, 6.35],
+    [7.0, 6.85],
+    [8.0, 6.85],
+  ],
+  // Yellow triangle: right of centre
+  yellow: [
+    [8.65, 7.15],
+    [8.65, 7.85],
+    [8.15, 7.0],
+    [8.15, 8.0],
+  ],
+  // Blue triangle: bottom of centre
+  blue: [
+    [7.15, 8.65],
+    [7.85, 8.65],
+    [7.0, 8.15],
+    [8.0, 8.15],
+  ],
+};
+
 /** Re-export shared safe cells so board UI matches server rules. */
 export const SAFE_SET = SAFE_CELLS;
 
@@ -102,7 +137,7 @@ export function tokenStackKey(
   steps: number,
 ): string {
   if (steps < 0) return `yard:${color}:${index}`;
-  if (steps === 56) return `fin:${color}`;
+  if (steps === 56) return `fin:${color}:${index}`;
   if (steps >= 51 && steps <= 55) return `home:${color}:${steps}`;
   const abs = (COLOR_START[color] + steps) % 52;
   return `track:${abs}`;
@@ -120,7 +155,9 @@ export function tokenBasePosition(
     return cellCenter(slot[0], slot[1]);
   }
   if (steps === 56) {
-    return cellCenter(CENTRE[0], CENTRE[1]);
+    const slot = HOME_FINISHED_SLOTS[color][index];
+    if (!slot) return cellCenter(CENTRE[0], CENTRE[1]);
+    return cellCenter(slot[0], slot[1]);
   }
   if (steps >= 51 && steps <= 55) {
     const cell = HOME_STRETCH[color][steps - 51];

@@ -10,6 +10,7 @@ import {
   isBarrierAbsolute,
   nextColorAmong,
   pickNextColor,
+  pickThreeSixesPenaltyToken,
   stackFanOffset,
   tryMoveSteps,
   absoluteTrackPosition,
@@ -122,6 +123,15 @@ describe("win and roll policy", () => {
     expect(gainsExtraTurn(6, false)).toBe(true);
     expect(gainsExtraTurn(3, true)).toBe(true);
     expect(gainsExtraTurn(3, false)).toBe(false);
+    expect(gainsExtraTurn(3, false, true)).toBe(true);
+  });
+
+  it("picks a token to return on three sixes", () => {
+    const tokens = createInitialTokens(["red"]);
+    tokens[0]!.steps = 10;
+    tokens[1]!.steps = 20;
+    expect(pickThreeSixesPenaltyToken(tokens, "red", 0)).toBe(0);
+    expect(pickThreeSixesPenaltyToken(tokens, "red", null)).toBe(1);
   });
 });
 

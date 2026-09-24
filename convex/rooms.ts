@@ -1,13 +1,16 @@
 import { mutation, query, MutationCtx, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
 import {
   COLORS,
   Color,
   createInitialTokens,
   generateRoomCode,
+  MAX_TIMEOUT_LIVES,
   nextColorAmong,
   pickNextColor,
+  TURN_TIMEOUT_MS,
 } from "./lib/ludo";
 import { assertValidClientId, CREATE_RATE_WINDOW_MS, JOIN_RATE_WINDOW_MS, MAX_JOINS_PER_WINDOW } from "./lib/session";
 import { colorValidator } from "./schema";
@@ -33,7 +36,11 @@ function publicRoom(room: Doc<"rooms">) {
     diceValue: room.diceValue,
     diceRolled: room.diceRolled,
     consecutiveSixes: room.consecutiveSixes,
+    turnId: room.turnId ?? 0,
+    turnStartedAt: room.turnStartedAt ?? null,
+    turnTimeoutMs: TURN_TIMEOUT_MS,
     winner: room.winner,
+    rankings: room.rankings ?? [],
     lastEvent: room.lastEvent,
     createdAt: room.createdAt,
     finishedAt: room.finishedAt ?? null,
@@ -50,6 +57,9 @@ function publicPlayers(
     name: p.name,
     color: p.color,
     connected: p.connected,
+    lives: p.lives ?? MAX_TIMEOUT_LIVES,
+    eliminated: !!p.eliminated,
+    finishRank: p.finishRank ?? null,
     isMe: sessionId !== null && p.clientId === sessionId,
     isHost: p.clientId === room.hostClientId,
   }));
@@ -143,15 +153,36 @@ async function resetBoard(
   }
 
   const firstTurn = activeColors[0]!;
+  const turnId = 1;
   await ctx.db.patch(roomId, {
     status: "playing",
     currentTurn: firstTurn,
     diceValue: null,
     diceRolled: false,
     consecutiveSixes: 0,
+    lastMovedTokenIndex: null,
+    turnId,
+    turnStartedAt: now,
     winner: null,
+    rankings: [],
     lastActivityAt: now,
     lastEvent,
+  });
+
+  const players = await ctx.db
+    .query("players")
+    .withIndex("by_room", (q) => q.eq("roomId", roomId))
+    .collect();
+  for (const p of players) {
+    await ctx.db.patch(p._id, {
+      lives: MAX_TIMEOUT_LIVES,
+      eliminated: false,
+    });
+  }
+
+  await ctx.scheduler.runAfter(TURN_TIMEOUT_MS, internal.game.handleTurnTimeout, {
+    roomId,
+    turnId,
   });
 }
 
@@ -200,6 +231,8 @@ export const createRoom = mutation({
       connected: true,
       lastSeenAt: now,
       joinedAt: now,
+      lives: MAX_TIMEOUT_LIVES,
+      eliminated: false,
     });
 
     return { roomId, code, color };
@@ -291,6 +324,8 @@ export const joinRoom = mutation({
       connected: true,
       lastSeenAt: now,
       joinedAt: now,
+      lives: MAX_TIMEOUT_LIVES,
+      eliminated: false,
     });
 
     // Defend against rare double-insert same colour.
@@ -430,12 +465,32 @@ export const leaveRoom = mutation({
         patches.winner = sole.color;
         patches.finishedAt = now;
         patches.diceRolled = false;
+        patches.rankings = [sole.color as Color, color];
         patches.lastEvent = `${sole.name} wins — ${player.name} left`;
       } else if (room.currentTurn === color) {
-        patches.currentTurn = nextColorAmong(color, seated);
+        const seatedPlayable = seated.filter((c) =>
+          remaining.some((p) => p.color === c && !p.eliminated),
+        );
+        const nextTurn = nextColorAmong(
+          color,
+          seatedPlayable.length > 0 ? seatedPlayable : seated,
+        );
+        const turnId = (room.turnId ?? 0) + 1;
+        patches.currentTurn = nextTurn;
         patches.diceRolled = false;
         patches.diceValue = null;
         patches.consecutiveSixes = 0;
+        patches.turnId = turnId;
+        patches.turnStartedAt = now;
+        patches.lastMovedTokenIndex = null;
+
+        await ctx.db.patch(args.roomId, patches);
+        await ctx.scheduler.runAfter(
+          TURN_TIMEOUT_MS,
+          internal.game.handleTurnTimeout,
+          { roomId: args.roomId, turnId },
+        );
+        return { emptied: false };
       }
 
       await ctx.db.patch(args.roomId, patches);

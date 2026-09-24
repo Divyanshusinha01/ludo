@@ -21,6 +21,13 @@ type Props = {
   tokens: BoardToken[];
   selectable?: number[];
   myColor?: Color | null;
+  /** Colour whose tokens should subtly glow (current turn). */
+  activeColor?: Color | null;
+  fx?: {
+    captureKey?: string;
+    homeKey?: string;
+    leaveKey?: string;
+  };
   onSelectToken?: (tokenIndex: number) => void;
 };
 
@@ -36,8 +43,8 @@ function Star({ x, y }: { x: number; y: number }) {
   return (
     <path
       d={`M ${x} ${y - s} L ${x + 4} ${y - 4} L ${x + s} ${y - 4} L ${x + 6} ${y + 2} L ${x + 10} ${y + s} L ${x} ${y + 6} L ${x - 10} ${y + s} L ${x - 6} ${y + 2} L ${x - s} ${y - 4} L ${x - 4} ${y - 4} Z`}
-      fill="#333"
-      opacity={0.35}
+      fill="#1e1810"
+      opacity={0.45}
     />
   );
 }
@@ -68,7 +75,14 @@ function stackedPositions(tokens: BoardToken[]) {
   return positions;
 }
 
-export function Board({ tokens, selectable = [], myColor, onSelectToken }: Props) {
+export function Board({
+  tokens,
+  selectable = [],
+  myColor,
+  activeColor,
+  fx,
+  onSelectToken,
+}: Props) {
   const size = 15 * CELL;
   const positions = stackedPositions(tokens);
   const interactive = selectable.length > 0 && !!onSelectToken;
@@ -114,7 +128,16 @@ export function Board({ tokens, selectable = [], myColor, onSelectToken }: Props
           const isStart =
             i === 0 || i === 13 || i === 26 || i === 39;
           const startColor: Color | null =
-            i === 0 ? "red" : i === 13 ? "green" : i === 26 ? "yellow" : i === 39 ? "blue" : null;
+            i === 0
+              ? "red"
+              : i === 13
+                ? "green"
+                : i === 26
+                  ? "yellow"
+                  : i === 39
+                    ? "blue"
+                    : null;
+          const safe = SAFE_SET.has(i);
           return (
             <g key={`t-${i}`}>
               <rect
@@ -122,13 +145,13 @@ export function Board({ tokens, selectable = [], myColor, onSelectToken }: Props
                 y={r * CELL + 2}
                 width={CELL - 4}
                 height={CELL - 4}
-                fill={startColor ? COLOR_HEX[startColor] : "#fff"}
-                stroke="#d4cbb8"
-                strokeWidth={2}
+                fill={startColor ? COLOR_HEX[startColor] : safe ? "#efe6c8" : "#fff"}
+                stroke={safe ? "#c4a35a" : "#d4cbb8"}
+                strokeWidth={safe ? 3 : 2}
                 rx={8}
                 opacity={isStart ? 0.85 : 1}
               />
-              {SAFE_SET.has(i) && !isStart && (
+              {safe && !isStart && (
                 <Star x={c * CELL + CELL / 2} y={r * CELL + CELL / 2} />
               )}
             </g>
@@ -168,15 +191,26 @@ export function Board({ tokens, selectable = [], myColor, onSelectToken }: Props
         />
 
         {tokens.map((t) => {
+          const key = `${t.color}-${t.index}`;
           const pos =
-            positions.get(`${t.color}-${t.index}`) ??
+            positions.get(key) ??
             tokenSvgPosition(t.color, t.index, t.steps);
           const canSelect =
             myColor === t.color && selectable.includes(t.index);
+          const isActiveTurn = activeColor === t.color;
+          const fxClass =
+            fx?.captureKey === key
+              ? styles.capture
+              : fx?.homeKey === key
+                ? styles.homePop
+                : fx?.leaveKey === key
+                  ? styles.leavePop
+                  : undefined;
+
           return (
             <g
-              key={`${t.color}-${t.index}`}
-              className={styles.token}
+              key={key}
+              className={`${styles.token} ${fxClass ?? ""}`}
               transform={`translate(${pos.x}, ${pos.y})`}
               role={canSelect ? "button" : undefined}
               tabIndex={canSelect ? 0 : undefined}
@@ -197,7 +231,9 @@ export function Board({ tokens, selectable = [], myColor, onSelectToken }: Props
               }}
               style={{ cursor: canSelect ? "pointer" : "default" }}
             >
-              <g className={canSelect ? styles.selectable : undefined}>
+              <g
+                className={`${canSelect ? styles.selectable : ""} ${isActiveTurn && !canSelect ? styles.turnGlow : ""}`}
+              >
                 {canSelect && (
                   <circle
                     r={36}
@@ -205,6 +241,16 @@ export function Board({ tokens, selectable = [], myColor, onSelectToken }: Props
                     stroke="#111"
                     strokeWidth={3}
                     className={styles.pulse}
+                  />
+                )}
+                {isActiveTurn && !canSelect && (
+                  <circle
+                    r={32}
+                    fill="none"
+                    stroke={COLOR_HEX[t.color]}
+                    strokeWidth={3}
+                    className={styles.turnRing}
+                    opacity={0.7}
                   />
                 )}
                 {canSelect && <circle r={40} fill="transparent" />}

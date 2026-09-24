@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import styles from "./Dice.module.css";
 
 type Props = {
@@ -7,6 +8,8 @@ type Props = {
   rolling?: boolean;
   disabled?: boolean;
   waitingLabel?: string;
+  /** Emphasize the revealed number after a roll. */
+  reveal?: boolean;
   onRoll: () => void;
 };
 
@@ -24,9 +27,27 @@ export function Dice({
   rolling,
   disabled,
   waitingLabel,
+  reveal,
   onRoll,
 }: Props) {
-  const pips = value && value >= 1 && value <= 6 ? FACES[value] : [];
+  const [spinFace, setSpinFace] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!rolling) {
+      setSpinFace(null);
+      return;
+    }
+    let n = 0;
+    const id = setInterval(() => {
+      n += 1;
+      setSpinFace(1 + (n % 6));
+    }, 70);
+    return () => clearInterval(id);
+  }, [rolling]);
+
+  const shown = rolling && spinFace ? spinFace : value;
+  const pips =
+    shown && shown >= 1 && shown <= 6 ? FACES[shown] : [];
   const label = disabled
     ? waitingLabel ??
       (value ? `Dice showing ${value}` : "Waiting to roll")
@@ -37,16 +58,17 @@ export function Dice({
   return (
     <button
       type="button"
-      className={`${styles.dice} ${rolling ? styles.rolling : ""}`}
+      className={`${styles.dice} ${rolling ? styles.rolling : ""} ${reveal && !rolling && value ? styles.reveal : ""} ${!disabled ? styles.ready : ""}`}
       onClick={onRoll}
       disabled={disabled}
       aria-label={label}
+      aria-disabled={disabled}
     >
       <span className={styles.face}>
         {pips?.map((i) => (
           <span key={i} className={`${styles.pip} ${styles[`p${i}`]}`} />
         ))}
-        {!value && <span className={styles.hint}>Roll</span>}
+        {!shown && <span className={styles.hint}>Roll</span>}
       </span>
     </button>
   );

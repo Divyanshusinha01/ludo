@@ -27,7 +27,18 @@ export default defineSchema({
     diceValue: v.union(v.number(), v.null()),
     diceRolled: v.boolean(),
     consecutiveSixes: v.number(),
+    /**
+     * Token index moved during the current consecutive-six streak
+     * (used for three-sixes yard return). Cleared when streak ends.
+     */
+    lastMovedTokenIndex: v.optional(v.union(v.number(), v.null())),
+    /** Monotonic id so scheduled turn timeouts ignore stale jobs. */
+    turnId: v.optional(v.number()),
+    /** When the current turn began (ms). Client countdown is derived. */
+    turnStartedAt: v.optional(v.number()),
     winner: v.union(colorValidator, v.null()),
+    /** Finish order (winner first, then subsequent finishers / survivors). */
+    rankings: v.optional(v.array(colorValidator)),
     lastEvent: v.optional(v.string()),
     createdAt: v.number(),
     /** Set when status becomes finished — used for finished TTL. */
@@ -54,6 +65,12 @@ export default defineSchema({
     color: colorValidator,
     connected: v.boolean(),
     lastSeenAt: v.number(),
+    /** Timeout lives remaining (default 3). */
+    lives: v.optional(v.number()),
+    /** Eliminated after losing all lives (or forfeit). */
+    eliminated: v.optional(v.boolean()),
+    /** 1 = winner, higher = later finish / elimination order. */
+    finishRank: v.optional(v.number()),
     /** Set on first seat insert — used for join rate-limiting. */
     joinedAt: v.optional(v.number()),
   })

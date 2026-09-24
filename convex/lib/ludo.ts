@@ -38,6 +38,13 @@ export const FINISHED_STEPS = 56;
 export const HOME_ENTRY_STEPS = 51;
 export const MAX_TRACK_STEPS = 50;
 
+/** Per-turn deadline (server-authoritative). */
+export const TURN_TIMEOUT_MS = 60_000;
+/** Timeouts before a player is eliminated. */
+export const MAX_TIMEOUT_LIVES = 3;
+/** How long a disconnected seat is kept before AFK skip / abandon logic. */
+export const RECONNECT_WINDOW_MS = 60_000;
+
 /** Ambiguity-free charset for room codes (no 0/O/1/I). */
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -220,9 +227,40 @@ export function decideRollOutcome(
   return { kind: "ok", consecutiveSixes };
 }
 
-/** Extra turn after a successful move. */
-export function gainsExtraTurn(dice: number, captured: boolean): boolean {
-  return dice === 6 || captured;
+/**
+ * Extra turn after a successful move: roll of 6, capture, or reaching home.
+ * (Classic family Ludo — finishing a token grants another roll.)
+ */
+export function gainsExtraTurn(
+  dice: number,
+  captured: boolean,
+  reachedHome = false,
+): boolean {
+  return dice === 6 || captured || reachedHome;
+}
+
+/**
+ * On three consecutive sixes the turn is voided. If a token was moved
+ * during the six-streak, that token returns to the yard; otherwise the
+ * player's furthest token still on the board/home stretch is returned.
+ */
+export function pickThreeSixesPenaltyToken(
+  tokens: TokenState[],
+  color: Color,
+  lastMovedIndex: number | null,
+): number | null {
+  const mine = tokens.filter(
+    (t) => t.color === color && t.steps >= 0 && t.steps < FINISHED_STEPS,
+  );
+  if (mine.length === 0) return null;
+
+  if (lastMovedIndex !== null) {
+    const last = mine.find((t) => t.index === lastMovedIndex);
+    if (last) return last.index;
+  }
+
+  mine.sort((a, b) => b.steps - a.steps || a.index - b.index);
+  return mine[0]!.index;
 }
 
 /** Fan-out offsets for N tokens sharing one cell (SVG units). */

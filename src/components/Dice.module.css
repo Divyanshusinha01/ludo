@@ -10,12 +10,25 @@
   cursor: pointer;
   padding: 0;
   touch-action: manipulation;
+  transition:
+    opacity 0.15s ease,
+    box-shadow 0.2s ease,
+    transform 0.2s ease;
+}
+
+.ready:not(:disabled) {
+  box-shadow:
+    0 4px 0 #c5c5c5,
+    0 8px 16px rgba(0, 0, 0, 0.18),
+    0 0 0 3px rgba(30, 24, 16, 0.35);
+  animation: readyPulse 1.4s ease-in-out infinite;
 }
 
 .dice:disabled {
-  opacity: 0.55;
+  opacity: 0.5;
   cursor: not-allowed;
   box-shadow: 0 2px 0 #c5c5c5;
+  animation: none;
 }
 
 .dice:not(:disabled):active {
@@ -63,17 +76,44 @@
 }
 
 .rolling {
-  animation: shake 0.45s ease-in-out;
+  animation: shake 0.5s ease-in-out infinite;
+}
+
+.reveal {
+  animation: popIn 0.55s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 @keyframes shake {
-  0%, 100% { transform: rotate(0deg); }
-  25% { transform: rotate(-12deg) scale(1.05); }
-  75% { transform: rotate(12deg) scale(1.05); }
+  0%, 100% { transform: rotate(0deg) scale(1); }
+  25% { transform: rotate(-14deg) scale(1.08); }
+  75% { transform: rotate(14deg) scale(1.08); }
+}
+
+@keyframes popIn {
+  0% { transform: scale(0.7); }
+  45% { transform: scale(1.22); }
+  100% { transform: scale(1); }
+}
+
+@keyframes readyPulse {
+  0%, 100% {
+    box-shadow:
+      0 4px 0 #c5c5c5,
+      0 8px 16px rgba(0, 0, 0, 0.18),
+      0 0 0 3px rgba(30, 24, 16, 0.25);
+  }
+  50% {
+    box-shadow:
+      0 4px 0 #c5c5c5,
+      0 8px 16px rgba(0, 0, 0, 0.18),
+      0 0 0 5px rgba(30, 24, 16, 0.45);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .rolling {
+  .rolling,
+  .reveal,
+  .ready:not(:disabled) {
     animation: none;
   }
 }
