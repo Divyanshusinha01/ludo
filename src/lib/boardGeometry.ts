@@ -93,37 +93,43 @@ export const YARD_SLOTS: Record<Color, Array<[number, number]>> = {
 export const CENTRE: [number, number] = [7, 7];
 
 /**
- * Fixed slots inside each colour's home triangle so finished tokens
- * never overlap (index 0..3).
+ * Finished-token seats inside each colour's home triangle (index 0..3).
+ *
+ * Coordinates are board-corner units (same space as the centre polygons in
+ * Board.tsx: 6..9). Do NOT pass these through cellCenter() — that adds a
+ * half-cell shift and pushes seats into the wrong triangle.
+ *
+ * Seats sit toward each triangle's wide base (away from the shared tip at
+ * 7.5,7.5) with ≥0.32 cell clearance so a finished token disc stays inside.
  */
 export const HOME_FINISHED_SLOTS: Record<Color, Array<[number, number]>> = {
-  // Red triangle: left of centre
+  // Red triangle: left of centre (6,6)-(6,9)-(7.5,7.5)
   red: [
-    [6.35, 7.15],
-    [6.35, 7.85],
-    [6.85, 7.0],
-    [6.85, 8.0],
+    [6.32, 7.2],
+    [6.32, 7.8],
+    [6.58, 7.4],
+    [6.58, 7.6],
   ],
-  // Green triangle: top of centre
+  // Green triangle: top of centre (6,6)-(9,6)-(7.5,7.5)
   green: [
-    [7.15, 6.35],
-    [7.85, 6.35],
-    [7.0, 6.85],
-    [8.0, 6.85],
+    [7.2, 6.32],
+    [7.8, 6.32],
+    [7.4, 6.58],
+    [7.6, 6.58],
   ],
-  // Yellow triangle: right of centre
+  // Yellow triangle: right of centre (9,6)-(9,9)-(7.5,7.5)
   yellow: [
-    [8.65, 7.15],
-    [8.65, 7.85],
-    [8.15, 7.0],
-    [8.15, 8.0],
+    [8.68, 7.2],
+    [8.68, 7.8],
+    [8.42, 7.4],
+    [8.42, 7.6],
   ],
-  // Blue triangle: bottom of centre
+  // Blue triangle: bottom of centre (6,9)-(9,9)-(7.5,7.5)
   blue: [
-    [7.15, 8.65],
-    [7.85, 8.65],
-    [7.0, 8.15],
-    [8.0, 8.15],
+    [7.2, 8.68],
+    [7.8, 8.68],
+    [7.4, 8.42],
+    [7.6, 8.42],
   ],
 };
 
@@ -157,7 +163,8 @@ export function tokenBasePosition(
   if (steps === 56) {
     const slot = HOME_FINISHED_SLOTS[color][index];
     if (!slot) return cellCenter(CENTRE[0], CENTRE[1]);
-    return cellCenter(slot[0], slot[1]);
+    // Corner-space coords (see HOME_FINISHED_SLOTS) — not cell centres.
+    return { x: slot[0] * CELL, y: slot[1] * CELL };
   }
   if (steps >= 51 && steps <= 55) {
     const cell = HOME_STRETCH[color][steps - 51];

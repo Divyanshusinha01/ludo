@@ -198,6 +198,17 @@ export function Board({
           const canSelect =
             myColor === t.color && selectable.includes(t.index);
           const isActiveTurn = activeColor === t.color;
+          const finished = t.steps === 56;
+          // Smaller disc when home so all four fit inside the centre triangle.
+          const bodyR = finished ? 16 : 24;
+          const shadowR = finished ? 17 : 26;
+          const strokeW = finished
+            ? t.color === "yellow"
+              ? 3
+              : 2.5
+            : t.color === "yellow"
+              ? 5
+              : 4;
           const fxClass =
             fx?.captureKey === key
               ? styles.capture
@@ -254,14 +265,25 @@ export function Board({
                   />
                 )}
                 {canSelect && <circle r={40} fill="transparent" />}
-                <circle r={26} fill="#111" opacity={0.2} cy={3} />
                 <circle
-                  r={24}
+                  r={shadowR}
+                  fill="#111"
+                  opacity={0.2}
+                  cy={finished ? 2 : 3}
+                />
+                <circle
+                  r={bodyR}
                   fill={COLOR_HEX[t.color]}
                   stroke="#1e1810"
-                  strokeWidth={t.color === "yellow" ? 5 : 4}
+                  strokeWidth={strokeW}
                 />
-                <circle r={8} fill="#fff" opacity={0.45} cx={-6} cy={-6} />
+                <circle
+                  r={finished ? 5 : 8}
+                  fill="#fff"
+                  opacity={0.45}
+                  cx={finished ? -4 : -6}
+                  cy={finished ? -4 : -6}
+                />
               </g>
             </g>
           );

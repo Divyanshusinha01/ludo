@@ -24,6 +24,7 @@ import { assertValidClientId, assertValidRoomCode, assertActionInterval } from "
 import { GameError } from "../convex/lib/errors";
 import { normalizeCode } from "../src/lib/player";
 import {
+  HOME_FINISHED_SLOTS,
   tokenStackKey,
   tokenSvgPosition,
 } from "../src/lib/boardGeometry";
@@ -232,6 +233,99 @@ describe("session, codes, and board geometry", () => {
     const posA = tokenSvgPosition("red", 0, 5, 0, 2);
     const posB = tokenSvgPosition("blue", 0, 18, 1, 2);
     expect(posA.x !== posB.x || posA.y !== posB.y).toBe(true);
+  });
+
+  it("keeps finished tokens inside their own home triangle", () => {
+    // Board polygons use corner-space pixels: vertex (c,r) → (c*CELL, r*CELL).
+    const distToSegment = (
+      px: number,
+      py: number,
+      ax: number,
+      ay: number,
+      bx: number,
+      by: number,
+    ) => {
+      const dx = bx - ax;
+      const dy = by - ay;
+      const len2 = dx * dx + dy * dy || 1;
+      const t = Math.max(
+        0,
+        Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2),
+      );
+      return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+    };
+
+    const inside = (
+      px: number,
+      py: number,
+      a: [number, number],
+      b: [number, number],
+      c: [number, number],
+    ) => {
+      const sign = (
+        x1: number,
+        y1: number,
+        x2: number,
+        y2: number,
+        x3: number,
+        y3: number,
+      ) => (x1 - x3) * (y2 - y3) - (x2 - x3) * (y1 - y3);
+      const d1 = sign(px, py, a[0], a[1], b[0], b[1]);
+      const d2 = sign(px, py, b[0], b[1], c[0], c[1]);
+      const d3 = sign(px, py, c[0], c[1], a[0], a[1]);
+      const hasNeg = d1 < 0 || d2 < 0 || d3 < 0;
+      const hasPos = d1 > 0 || d2 > 0 || d3 > 0;
+      return !(hasNeg && hasPos);
+    };
+
+    const CELL = 100;
+    // Finished tokens use body radius 16 + stroke ≤3 → need ≥19px clearance.
+    const MIN_EDGE_PX = 19;
+    const triangles = {
+      red: [
+        [6 * CELL, 6 * CELL],
+        [6 * CELL, 9 * CELL],
+        [7.5 * CELL, 7.5 * CELL],
+      ] as [[number, number], [number, number], [number, number]],
+      green: [
+        [6 * CELL, 6 * CELL],
+        [9 * CELL, 6 * CELL],
+        [7.5 * CELL, 7.5 * CELL],
+      ] as [[number, number], [number, number], [number, number]],
+      yellow: [
+        [9 * CELL, 6 * CELL],
+        [9 * CELL, 9 * CELL],
+        [7.5 * CELL, 7.5 * CELL],
+      ] as [[number, number], [number, number], [number, number]],
+      blue: [
+        [6 * CELL, 9 * CELL],
+        [9 * CELL, 9 * CELL],
+        [7.5 * CELL, 7.5 * CELL],
+      ] as [[number, number], [number, number], [number, number]],
+    };
+
+    for (const color of ["red", "green", "yellow", "blue"] as const) {
+      const tri = triangles[color];
+      for (let i = 0; i < 4; i++) {
+        const slot = HOME_FINISHED_SLOTS[color][i]!;
+        const pos = tokenSvgPosition(color, i, 56);
+        expect(pos.x).toBe(slot[0] * CELL);
+        expect(pos.y).toBe(slot[1] * CELL);
+
+        expect(inside(pos.x, pos.y, ...tri)).toBe(true);
+        const edge = Math.min(
+          distToSegment(pos.x, pos.y, tri[0][0], tri[0][1], tri[1][0], tri[1][1]),
+          distToSegment(pos.x, pos.y, tri[1][0], tri[1][1], tri[2][0], tri[2][1]),
+          distToSegment(pos.x, pos.y, tri[2][0], tri[2][1], tri[0][0], tri[0][1]),
+        );
+        expect(edge).toBeGreaterThanOrEqual(MIN_EDGE_PX);
+
+        for (const other of ["red", "green", "yellow", "blue"] as const) {
+          if (other === color) continue;
+          expect(inside(pos.x, pos.y, ...triangles[other])).toBe(false);
+        }
+      }
+    }
   });
 });
 
