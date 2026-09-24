@@ -10,6 +10,7 @@ import { Button, StatusText } from "@/components/ui";
 import {
   formatConvexError,
   getStoredName,
+  normalizeCode,
   storeName,
   useSessionId,
 } from "@/lib/player";
@@ -20,50 +21,62 @@ export function RoomClient({ code }: { code: string }) {
   const [joinError, setJoinError] = useState<string | null>(null);
   const [retryKey, setRetryKey] = useState(0);
   const joinAttempted = useRef(false);
+  const roomCode = normalizeCode(code);
 
   const data = useQuery(
     api.rooms.getRoomByCode,
-    clientId ? { code: code.toUpperCase(), clientId } : "skip",
+    clientId && roomCode.length === 6
+      ? { code: roomCode, clientId }
+      : "skip",
   );
   const joinRoom = useMutation(api.rooms.joinRoom);
 
-  useEffect(() => {
-    joinAttempted.current = false;
-  }, [code, retryKey]);
+  const roomStatus = data?.room.status;
+  const hasMe = !!data?.me;
+  const roomMissing = data === null;
+  const roomLoading = data === undefined;
 
   useEffect(() => {
-    if (!clientId || data === undefined || data === null) return;
-    if (data.me || joinAttempted.current) return;
-    if (data.room.status !== "lobby") return;
+    joinAttempted.current = false;
+  }, [roomCode, retryKey]);
+
+  useEffect(() => {
+    if (!clientId || roomLoading || roomMissing) return;
+    if (hasMe || joinAttempted.current || joinError) return;
+    if (roomStatus !== "lobby") return;
 
     joinAttempted.current = true;
     const name = getStoredName() || "Player";
     storeName(name);
-    let cancelled = false;
     void joinRoom({
-      code: code.toUpperCase(),
+      code: roomCode,
       clientId,
       name,
     })
       .then(() => {
-        if (!cancelled) setJoinError(null);
+        setJoinError(null);
       })
       .catch((e) => {
-        if (!cancelled) {
-          joinAttempted.current = false;
-          setJoinError(formatConvexError(e, "Could not join"));
-        }
+        joinAttempted.current = false;
+        setJoinError(formatConvexError(e, "Could not join"));
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [clientId, data, code, joinRoom, retryKey]);
+  }, [
+    clientId,
+    roomLoading,
+    roomMissing,
+    hasMe,
+    roomStatus,
+    roomCode,
+    joinRoom,
+    retryKey,
+    joinError,
+  ]);
 
-  if (!clientId || data === undefined) {
+  if (!clientId || (roomCode.length === 6 && roomLoading)) {
     return <StatusText>Connecting…</StatusText>;
   }
 
-  if (data === null) {
+  if (roomCode.length !== 6 || roomMissing) {
     return (
       <div className={styles.center}>
         <h1>Room not found</h1>
@@ -74,7 +87,7 @@ export function RoomClient({ code }: { code: string }) {
   }
 
   const spectatorBlocked =
-    !data.me && data.room.status !== "lobby" && !joinError;
+    !hasMe && roomStatus !== "lobby" && !joinError;
 
   if (joinError || spectatorBlocked) {
     return (
@@ -84,7 +97,7 @@ export function RoomClient({ code }: { code: string }) {
           {joinError ??
             "This game already started and you are not in it."}
         </p>
-        {joinError && data.room.status === "lobby" && (
+        {joinError && roomStatus === "lobby" && (
           <Button
             variant="primary"
             onClick={() => {
@@ -100,7 +113,7 @@ export function RoomClient({ code }: { code: string }) {
     );
   }
 
-  if (!data.me) {
+  if (!hasMe || !data) {
     return <StatusText>Joining room…</StatusText>;
   }
 
