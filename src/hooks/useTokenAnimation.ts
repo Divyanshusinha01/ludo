@@ -60,14 +60,23 @@ export function useTokenAnimation(serverTokens: AnimToken[]) {
   useEffect(() => {
     const prev = prevRef.current;
     if (signature(prev) === sig) {
-      setDisplay(serverTokens);
       return;
     }
 
+    const tokens = serverTokens;
+    const snapToServer = () => {
+      prevRef.current = tokens;
+      // Defer so we never setState synchronously inside the effect body.
+      setTimeout(() => {
+        setDisplay(tokens);
+        setAnimating(false);
+        setFx({});
+      }, 0);
+    };
+
     // Rematch / seat change — snap
     if (prev.length !== serverTokens.length) {
-      prevRef.current = serverTokens;
-      setDisplay(serverTokens);
+      snapToServer();
       return;
     }
 
@@ -101,8 +110,7 @@ export function useTokenAnimation(serverTokens: AnimToken[]) {
     }
 
     if (jobs.length === 0) {
-      prevRef.current = serverTokens;
-      setDisplay(serverTokens);
+      snapToServer();
       return;
     }
 
@@ -115,10 +123,7 @@ export function useTokenAnimation(serverTokens: AnimToken[]) {
           j.kind === "move" && stepsAlongPath(j.from, j.to).length > 6,
       );
     if (shouldSnap) {
-      prevRef.current = serverTokens;
-      setDisplay(serverTokens);
-      setAnimating(false);
-      setFx({});
+      snapToServer();
       return;
     }
 

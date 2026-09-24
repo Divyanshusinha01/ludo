@@ -83,11 +83,13 @@ async function beginTurn(
 ) {
   const turnId = (room.turnId ?? 0) + 1;
   const now = Date.now();
+  // `patch` may include lastEvent / diceValue (last face for UI).
+  // Turn-control fields below always win over patch.
   await ctx.db.patch(room._id, {
+    diceValue: null,
     ...patch,
     currentTurn: next,
     diceRolled: false,
-    diceValue: null,
     consecutiveSixes: 0,
     lastMovedTokenIndex: null,
     turnId,
@@ -503,7 +505,6 @@ export const moveToken = mutation({
     });
 
     if (hasWon(updatedTokens, player.color)) {
-      const players = await seatedPlayers(ctx, args.roomId);
       const rankings = [...(fresh.rankings ?? []), player.color as Color];
       await ctx.db.patch(player._id, { finishRank: rankings.length });
       await ctx.db.patch(args.roomId, {

@@ -58,15 +58,25 @@ export function RoomClient({ code }: { code: string }) {
     if (!pending) return;
 
     pendingJoinTried.current = true;
-    setJoining(true);
-    setJoinError(null);
-    void joinRoom({ code: roomCode, clientId, name: pending })
-      .catch((err) => {
-        pendingJoinTried.current = false;
-        setJoinError(formatConvexError(err, "Could not join"));
-        setName("");
-      })
-      .finally(() => setJoining(false));
+    let cancelled = false;
+    // Defer state updates out of the synchronous effect body.
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      setJoining(true);
+      setJoinError(null);
+      void joinRoom({ code: roomCode, clientId, name: pending })
+        .catch((err) => {
+          pendingJoinTried.current = false;
+          setJoinError(formatConvexError(err, "Could not join"));
+          setName("");
+        })
+        .finally(() => {
+          if (!cancelled) setJoining(false);
+        });
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [
     clientId,
     roomLoading,

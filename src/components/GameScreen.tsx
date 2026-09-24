@@ -38,23 +38,17 @@ function useTurnCountdown(
   timeoutMs: number,
   playing: boolean,
 ) {
-  const [remaining, setRemaining] = useState(timeoutMs);
+  // Display-only clock; server enforces expiry via turnStartedAt.
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    if (!playing || !turnStartedAt) {
-      setRemaining(timeoutMs);
-      return;
-    }
-    const tick = () => {
-      const left = Math.max(0, turnStartedAt + timeoutMs - Date.now());
-      setRemaining(left);
-    };
-    tick();
-    const id = setInterval(tick, 200);
+    if (!playing || !turnStartedAt) return;
+    const id = setInterval(() => setNow(Date.now()), 200);
     return () => clearInterval(id);
   }, [turnStartedAt, timeoutMs, playing]);
 
-  return remaining;
+  if (!playing || !turnStartedAt) return timeoutMs;
+  return Math.max(0, turnStartedAt + timeoutMs - now);
 }
 
 export function GameScreen({ roomId, clientId }: Props) {
@@ -68,7 +62,9 @@ export function GameScreen({ roomId, clientId }: Props) {
   const [reveal, setReveal] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [muted, setMutedState] = useState(false);
+  const [muted, setMutedState] = useState(() =>
+    typeof window !== "undefined" ? isMuted() : false,
+  );
   const [offline, setOffline] = useState(false);
   const lastTurnId = useRef<number | null>(null);
   const winPlayed = useRef(false);
@@ -78,7 +74,6 @@ export function GameScreen({ roomId, clientId }: Props) {
   useRoomPresence(roomId, clientId);
 
   useEffect(() => {
-    setMutedState(isMuted());
     bindAudioUnlock();
   }, []);
 

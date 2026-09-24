@@ -33,10 +33,7 @@ export function Dice({
   const [spinFace, setSpinFace] = useState<number | null>(null);
 
   useEffect(() => {
-    if (!rolling) {
-      setSpinFace(null);
-      return;
-    }
+    if (!rolling) return;
     let n = 0;
     const id = setInterval(() => {
       n += 1;
@@ -45,7 +42,8 @@ export function Dice({
     return () => clearInterval(id);
   }, [rolling]);
 
-  const shown = rolling && spinFace ? spinFace : value;
+  // While rolling, animate with spinFace; otherwise show the server value.
+  const shown = rolling ? (spinFace ?? value) : value;
   const pips =
     shown && shown >= 1 && shown <= 6 ? FACES[shown] : [];
   const label = disabled

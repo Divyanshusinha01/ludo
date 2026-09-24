@@ -74,6 +74,15 @@ async function playToCompletion(client: ConvexHttpClient) {
       return;
     }
 
+    // Keep presence fresh so cleanup does not treat bot seats as abandoned.
+    if (i % 10 === 0) {
+      await Promise.all(
+        ids.map((clientId) =>
+          client.mutation(api.rooms.heartbeat, { roomId, clientId }),
+        ),
+      );
+    }
+
     const turn = state!.room.currentTurn;
     const clientId = colorToClient[turn]!;
     const turnId = state!.room.turnId;
@@ -91,11 +100,16 @@ async function playToCompletion(client: ConvexHttpClient) {
       clientId,
     });
     if (!legal.length) continue;
+    // turnId may have advanced after roll-again / skip — re-read.
+    const fresh = await client.query(api.rooms.getRoom, {
+      roomId,
+      clientId,
+    });
     await client.mutation(api.game.moveToken, {
       roomId,
       clientId,
       tokenIndex: legal[0]!,
-      turnId,
+      turnId: fresh!.room.turnId,
     });
   }
 

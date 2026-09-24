@@ -96,42 +96,34 @@ export const tick = internalMutation({
       }
 
       const connected = refreshed.filter((p) => p.connected);
-      if (refreshed.length >= 1 && connected.length < 2) {
+      // Only auto-crown when exactly one human is still connected.
+      // If everyone is offline, wait for abandon/idle TTL so reconnects can resume.
+      if (connected.length === 1 && refreshed.length >= 2) {
         const newestSeen = refreshed.reduce(
           (max, p) => Math.max(max, p.lastSeenAt),
           0,
         );
         if (now - newestSeen > UNDERPOPULATED_MS) {
-          const sole = connected[0];
-          if (sole) {
-            const rankings = buildFinalRankings(
-              room.rankings ?? [],
-              sole.color as Color,
-              refreshed.map((p) => ({
-                color: p.color as Color,
-                finishRank: p.finishRank ?? (p.connected ? null : 999),
-              })),
-            );
-            await ctx.db.patch(sole._id, {
-              finishRank: rankings.indexOf(sole.color as Color) + 1,
-            });
-            await ctx.db.patch(room._id, {
-              status: "finished",
-              winner: sole.color as Color,
-              rankings,
-              finishedAt: now,
-              diceRolled: false,
-              lastEvent: `${sole.name} wins — others left`,
-            });
-          } else {
-            await ctx.db.patch(room._id, {
-              status: "finished",
-              winner: null,
-              finishedAt: now,
-              diceRolled: false,
-              lastEvent: "Game ended — no players left",
-            });
-          }
+          const sole = connected[0]!;
+          const rankings = buildFinalRankings(
+            room.rankings ?? [],
+            sole.color as Color,
+            refreshed.map((p) => ({
+              color: p.color as Color,
+              finishRank: p.finishRank ?? (p.connected ? null : 999),
+            })),
+          );
+          await ctx.db.patch(sole._id, {
+            finishRank: rankings.indexOf(sole.color as Color) + 1,
+          });
+          await ctx.db.patch(room._id, {
+            status: "finished",
+            winner: sole.color as Color,
+            rankings,
+            finishedAt: now,
+            diceRolled: false,
+            lastEvent: `${sole.name} wins — others left`,
+          });
           continue;
         }
       }

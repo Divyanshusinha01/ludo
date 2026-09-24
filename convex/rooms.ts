@@ -308,6 +308,7 @@ export const joinRoom = mutation({
     }
 
     if (room.status !== "lobby") {
+      if (room.status === "finished") fail(GameError.gameFinished);
       fail(GameError.gameStarted);
     }
 
