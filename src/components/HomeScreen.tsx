@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useMutation } from "convex/react";
 import { useRouter } from "next/navigation";
 import { api } from "../../convex/_generated/api";
@@ -12,6 +12,7 @@ import {
   storeName,
   useSessionId,
 } from "@/lib/player";
+import { bindAudioUnlock } from "@/lib/sounds";
 import { InstallHint } from "./InstallHint";
 import styles from "./HomeScreen.module.css";
 
@@ -24,6 +25,10 @@ export function HomeScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const clientId = useSessionId();
+
+  useEffect(() => {
+    bindAudioUnlock();
+  }, []);
 
   async function onCreate(e: FormEvent) {
     e.preventDefault();

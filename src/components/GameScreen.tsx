@@ -9,7 +9,7 @@ import { getLegalMoves } from "../../convex/lib/ludo";
 import { useRoomPresence } from "@/hooks/useRoomPresence";
 import { useTokenAnimation } from "@/hooks/useTokenAnimation";
 import { haptic } from "@/lib/haptics";
-import { isMuted, playSound, setMuted } from "@/lib/sounds";
+import { bindAudioUnlock, isMuted, playSound, setMuted } from "@/lib/sounds";
 import { Board } from "./Board";
 import { Dice } from "./Dice";
 import { Button, ErrorText, StatusText } from "./ui";
@@ -78,6 +78,7 @@ export function GameScreen({ roomId, clientId }: Props) {
 
   useEffect(() => {
     setMutedState(isMuted());
+    bindAudioUnlock();
   }, []);
 
   useEffect(() => {
@@ -245,6 +246,7 @@ export function GameScreen({ roomId, clientId }: Props) {
     const next = !muted;
     setMuted(next);
     setMutedState(next);
+    if (!next) playSound("unmute");
   }
 
   const waitingLabel = canRoll
@@ -383,7 +385,7 @@ export function GameScreen({ roomId, clientId }: Props) {
             >
               <span className={styles.swatch} />
               <span className={styles.playerMeta}>
-                <span>
+                <span className={styles.playerName}>
                   {p.name}
                   {p.isMe ? " (you)" : ""}
                   {p.eliminated
