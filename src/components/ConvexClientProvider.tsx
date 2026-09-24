@@ -4,14 +4,38 @@ import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { ReactNode, useMemo } from "react";
 
 export function ConvexClientProvider({ children }: { children: ReactNode }) {
+  const url = process.env.NEXT_PUBLIC_CONVEX_URL;
   const client = useMemo(() => {
-    const url = process.env.NEXT_PUBLIC_CONVEX_URL;
-    if (!url) {
-      console.warn("NEXT_PUBLIC_CONVEX_URL is not set");
-      return new ConvexReactClient("https://placeholder.convex.cloud");
-    }
+    if (!url) return null;
     return new ConvexReactClient(url);
-  }, []);
+  }, [url]);
+
+  if (!client) {
+    return (
+      <div
+        style={{
+          padding: "2rem",
+          fontFamily: "var(--font-body), system-ui, sans-serif",
+          maxWidth: 420,
+          color: "var(--ink, #1e1810)",
+        }}
+      >
+        <h1
+          style={{
+            fontSize: "1.5rem",
+            fontFamily: "var(--font-display), Georgia, serif",
+          }}
+        >
+          Setup needed
+        </h1>
+        <p>
+          <code>NEXT_PUBLIC_CONVEX_URL</code> is not set. Run{" "}
+          <code>npx convex dev</code> locally, or add the Convex deployment URL
+          to your environment.
+        </p>
+      </div>
+    );
+  }
 
   return <ConvexProvider client={client}>{children}</ConvexProvider>;
 }

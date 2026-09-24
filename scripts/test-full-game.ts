@@ -52,7 +52,10 @@ async function playToCompletion(client: ConvexHttpClient) {
   };
 
   for (let i = 0; i < 2500; i++) {
-    const state = await client.query(api.rooms.getRoom, { roomId });
+    const state = await client.query(api.rooms.getRoom, {
+      roomId,
+      clientId: "c0",
+    });
     assert(state, "state");
     if (state!.room.status === "finished") {
       assert(state!.room.winner, "has winner");

@@ -71,3 +71,9 @@
   25% { transform: rotate(-12deg) scale(1.05); }
   75% { transform: rotate(12deg) scale(1.05); }
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .rolling {
+    animation: none;
+  }
+}

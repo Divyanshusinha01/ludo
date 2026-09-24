@@ -30,7 +30,18 @@ export default defineSchema({
     winner: v.union(colorValidator, v.null()),
     lastEvent: v.optional(v.string()),
     createdAt: v.number(),
-  }).index("by_code", ["code"]),
+    /** Set when status becomes finished — used for finished TTL. */
+    finishedAt: v.optional(v.number()),
+    /** Updated on gameplay mutations — used to expire idle playing rooms. */
+    lastActivityAt: v.optional(v.number()),
+    /**
+     * Authoritative seated colours for OCC-safe join.
+     * Concurrent joins patch this field; losers retry.
+     */
+    seatedColors: v.optional(v.array(colorValidator)),
+  })
+    .index("by_code", ["code"])
+    .index("by_host", ["hostClientId"]),
 
   players: defineTable({
     roomId: v.id("rooms"),

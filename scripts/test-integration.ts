@@ -32,39 +32,63 @@ async function main() {
     clientId: "host-1",
     name: "Host",
   });
-  assert(create.code.length === 6, "room code is 6 digits");
+  assert(create.code.length === 6, "room code is 6 chars");
   assert(create.color === "red", "host is red");
   const { code, roomId } = create;
 
   assert(
-    (await client.mutation(api.rooms.joinRoom, {
-      code,
-      clientId: "p2",
-      name: "Green",
-    })).color === "green",
+    (
+      await client.mutation(api.rooms.joinRoom, {
+        code,
+        clientId: "p2",
+        name: "Green",
+      })
+    ).color === "green",
     "p2 green",
   );
+
+  // 2-player start should work
+  await client.mutation(api.rooms.startGame, {
+    roomId,
+    clientId: "host-1",
+  });
+
+  let state = await client.query(api.rooms.getRoomByCode, {
+    code,
+    clientId: "host-1",
+  });
+  assert(state, "room exists");
+  assert(state!.room.status === "playing", "2p game started");
+  assert(state!.tokens.length === 8, "8 tokens for 2 players");
+  assert(state!.me?.isHost === true, "host flagged");
   assert(
-    (await client.mutation(api.rooms.joinRoom, {
-      code,
-      clientId: "p3",
-      name: "Yellow",
-    })).color === "yellow",
-    "p3 yellow",
+    state!.players.every((p) => !("clientId" in p)),
+    "session ids not leaked",
   );
-  assert(
-    (await client.mutation(api.rooms.joinRoom, {
-      code,
-      clientId: "p4",
-      name: "Blue",
-    })).color === "blue",
-    "p4 blue",
-  );
+
+  // Fresh 4-player room for remaining checks
+  const create4 = await client.mutation(api.rooms.createRoom, {
+    clientId: "h4",
+    name: "Host4",
+  });
+  const code4 = create4.code;
+  const roomId4 = create4.roomId;
+  for (const [id, name] of [
+    ["p2b", "Green"],
+    ["p3", "Yellow"],
+    ["p4", "Blue"],
+  ] as const) {
+    await client.mutation(api.rooms.joinRoom, {
+      code: code4,
+      clientId: id,
+      name,
+    });
+  }
 
   let rejected = false;
   try {
     await client.mutation(api.rooms.joinRoom, {
-      code,
+      code: code4,
       clientId: "p5",
       name: "Extra",
     });
@@ -74,29 +98,29 @@ async function main() {
   assert(rejected, "5th player rejected");
 
   const recon = await client.mutation(api.rooms.joinRoom, {
-    code,
-    clientId: "p2",
+    code: code4,
+    clientId: "p2b",
     name: "Green2",
   });
   assert(recon.reconnected === true, "reconnect works");
   assert(recon.color === "green", "reconnect keeps colour");
 
   await client.mutation(api.rooms.startGame, {
-    roomId,
-    clientId: "host-1",
+    roomId: roomId4,
+    clientId: "h4",
   });
 
   let badTurn = false;
   try {
-    await client.mutation(api.game.rollDice, { roomId, clientId: "p2" });
+    await client.mutation(api.game.rollDice, { roomId: roomId4, clientId: "p2b" });
   } catch {
     badTurn = true;
   }
   assert(badTurn, "non-turn player cannot roll");
 
   const roll = await client.mutation(api.game.rollDice, {
-    roomId,
-    clientId: "host-1",
+    roomId: roomId4,
+    clientId: "h4",
   });
   assert(roll.value >= 1 && roll.value <= 6, "dice 1-6");
 
@@ -104,8 +128,8 @@ async function main() {
     let illegal = false;
     try {
       await client.mutation(api.game.moveToken, {
-        roomId,
-        clientId: "host-1",
+        roomId: roomId4,
+        clientId: "h4",
         tokenIndex: 99,
       });
     } catch {
@@ -114,13 +138,16 @@ async function main() {
     assert(illegal, "invalid token rejected");
 
     await client.mutation(api.game.moveToken, {
-      roomId,
-      clientId: "host-1",
+      roomId: roomId4,
+      clientId: "h4",
       tokenIndex: roll.legalMoves[0]!,
     });
   }
 
-  const state = await client.query(api.rooms.getRoomByCode, { code });
+  state = await client.query(api.rooms.getRoomByCode, {
+    code: code4,
+    clientId: "h4",
+  });
   assert(state, "room exists");
   assert(
     state!.room.status === "playing" || state!.room.status === "finished",
@@ -129,9 +156,7 @@ async function main() {
   assert(state!.players.length === 4, "4 players");
   assert(state!.tokens.length === 16, "16 tokens");
 
-  // Simulate complete game flow: force tokens nearly finished via repeated plays is heavy;
-  // verify win detection with a dedicated short room by rolling until a move happens.
-  console.log("Integration tests passed. Room", code);
+  console.log("Integration tests passed. Rooms", code, code4);
 }
 
 main().catch((e) => {

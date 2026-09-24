@@ -1,6 +1,6 @@
 # Family Ludo
 
-4-player online Ludo for phones. Next.js + Convex realtime. No accounts — just room codes.
+2–4 player online Ludo for phones. Next.js + Convex realtime. No accounts — just room codes.
 
 ## Stack
 
@@ -20,8 +20,17 @@
 
 - `npm run dev` — Next.js frontend
 - `npm run dev:convex` — Convex backend watcher
-- `npm run test:logic` — pure Ludo rules unit checks
+- `npm test` / `npm run test:logic` — pure Ludo rules + roll policy + geometry unit checks
+- `npm run test:integration` — live Convex smoke (needs `.env.local`)
 - `npm run build` — production Next.js build
+
+### Mobile QA checklist
+
+- Safe-area padding on notched phones (home indicator not covering Leave / CTAs)
+- Share sheet / copy room code from lobby
+- Two tokens on one cell fan out (barrier / safe stacks are tappable)
+- Leave during play returns home and forfeits the seat
+- Create game submits with Enter from the name field
 
 ## Deploy (production — phones need Convex cloud)
 
@@ -50,10 +59,11 @@ Then import the repo in Vercel and set `NEXT_PUBLIC_CONVEX_URL`.
 
 ## How to play
 
-1. One person taps **Create game** and shares the 6-digit code
-2. Three others **Join game** with the code (max 4)
-3. Host starts when all four are in the lobby
+1. One person taps **Create game** and shares the 6-character code (or uses Copy / share)
+2. Others **Join game** with the code (2–4 players)
+3. Host starts when at least two players are in the lobby
 4. On your turn: roll the dice, tap a glowing token to move
+5. After a win: **Play again** for a rematch, or go home
 
 ### Rules implemented
 
@@ -61,6 +71,14 @@ Then import the repo in Vercel and set `NEXT_PUBLIC_CONVEX_URL`.
 - Exact count to finish
 - Capture opponents on non-safe cells (sent home)
 - Safe cells: start squares + star cells
+- **Barrier**: two tokens of the same colour on one cell cannot be captured or landed on. Tokens may still pass through a barrier cell mid-path (destination-only block)
 - Extra turn on **6** or capture
 - Three consecutive 6s skips the turn
+- Away players are skipped after ~60s; leaving mid-game forfeits your seat (if only one player remains, they win)
+- Finished rooms expire ~6h after the win; idle/abandoned playing rooms are cleaned up automatically
+- Rematch is host-only and drops long-away seats
 - First player to finish all four tokens wins
+
+### Privacy
+
+Your session id stays in this device’s browser storage and is never returned to other players in room queries. Session ids must be valid UUIDs; room creation is lightly rate-limited.

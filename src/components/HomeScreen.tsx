@@ -1,31 +1,30 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useState } from "react";
 import { useMutation } from "convex/react";
 import { useRouter } from "next/navigation";
 import { api } from "../../convex/_generated/api";
+import { Button, ErrorText } from "./ui";
 import {
-  getOrCreateClientId,
-  getStoredName,
+  formatConvexError,
+  normalizeCode,
   storeName,
+  useSessionId,
+  useStoredName,
 } from "@/lib/player";
 import styles from "./HomeScreen.module.css";
 
 export function HomeScreen() {
   const router = useRouter();
   const createRoom = useMutation(api.rooms.createRoom);
-  const joinRoom = useMutation(api.rooms.joinRoom);
   const [mode, setMode] = useState<"home" | "join">("home");
-  const [name, setName] = useState("");
+  const storedName = useStoredName();
+  const [name, setName] = useState<string | null>(null);
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [clientId, setClientId] = useState("");
-
-  useEffect(() => {
-    setClientId(getOrCreateClientId());
-    setName(getStoredName());
-  }, []);
+  const clientId = useSessionId();
+  const displayName = name ?? storedName;
 
   async function onCreate(e: FormEvent) {
     e.preventDefault();
@@ -33,81 +32,79 @@ export function HomeScreen() {
     setBusy(true);
     setError(null);
     try {
-      storeName(name);
-      const res = await createRoom({ clientId, name });
+      storeName(displayName);
+      const res = await createRoom({ clientId, name: displayName });
       router.push(`/room/${res.code}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create");
+      setError(formatConvexError(err, "Failed to create"));
     } finally {
       setBusy(false);
     }
   }
 
-  async function onJoin(e: FormEvent) {
+  function onJoin(e: FormEvent) {
     e.preventDefault();
     if (!clientId) return;
-    setBusy(true);
     setError(null);
-    try {
-      storeName(name);
-      const res = await joinRoom({
-        clientId,
-        name,
-        code: code.replace(/\D/g, "").slice(0, 6),
-      });
-      router.push(`/room/${res.code}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to join");
-    } finally {
-      setBusy(false);
+    storeName(displayName);
+    const normalized = normalizeCode(code);
+    if (normalized.length !== 6) {
+      setError("Enter a 6-character room code");
+      return;
     }
+    // RoomClient owns join — avoids double-join races with Home.
+    router.push(`/room/${normalized}`);
   }
 
   return (
     <div className={styles.shell}>
       <div className={styles.hero}>
         <p className={styles.brand}>Family Ludo</p>
-        <h1 className={styles.headline}>Four phones. One board.</h1>
+        <h1 className={styles.headline}>Family phones. One board.</h1>
         <p className={styles.sub}>
-          Create a room, share the code, and play together in realtime.
+          Create a room, share the code, and play with 2–4 people in realtime.
         </p>
       </div>
 
       {mode === "home" ? (
-        <div className={styles.actions}>
+        <form className={styles.actions} onSubmit={onCreate}>
           <label className={styles.field}>
             Your name
             <input
-              value={name}
+              value={displayName}
               onChange={(e) => setName(e.target.value)}
               maxLength={20}
               placeholder="e.g. Divsi"
               autoComplete="nickname"
             />
           </label>
-          <button
-            type="button"
-            className={styles.primary}
-            disabled={busy || !name.trim()}
-            onClick={onCreate}
+          {!clientId && (
+            <p className={styles.hint} role="status">
+              Preparing session…
+            </p>
+          )}
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={busy || !displayName.trim() || !clientId}
           >
             Create game
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className={styles.secondary}
-            disabled={busy || !name.trim()}
+            variant="secondary"
+            disabled={busy || !displayName.trim() || !clientId}
             onClick={() => setMode("join")}
           >
             Join game
-          </button>
-        </div>
+          </Button>
+        </form>
       ) : (
         <form className={styles.actions} onSubmit={onJoin}>
           <label className={styles.field}>
             Your name
             <input
-              value={name}
+              value={displayName}
               onChange={(e) => setName(e.target.value)}
               maxLength={20}
               placeholder="e.g. Divsi"
@@ -118,34 +115,34 @@ export function HomeScreen() {
             Room code
             <input
               value={code}
-              onChange={(e) =>
-                setCode(e.target.value.replace(/\D/g, "").slice(0, 6))
-              }
-              inputMode="numeric"
-              pattern="[0-9]*"
-              placeholder="6-digit code"
+              onChange={(e) => setCode(normalizeCode(e.target.value))}
+              inputMode="text"
+              autoCapitalize="characters"
+              placeholder="6-character code"
               maxLength={6}
               autoComplete="one-time-code"
             />
           </label>
-          <button
+          <Button
             type="submit"
-            className={styles.primary}
-            disabled={busy || !name.trim() || code.length !== 6}
+            variant="primary"
+            disabled={
+              busy || !displayName.trim() || code.length !== 6 || !clientId
+            }
           >
             Join room
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className={styles.secondary}
+            variant="secondary"
             onClick={() => setMode("home")}
           >
             Back
-          </button>
+          </Button>
         </form>
       )}
 
-      {error && <p className={styles.error}>{error}</p>}
+      <ErrorText>{error}</ErrorText>
     </div>
   );
 }

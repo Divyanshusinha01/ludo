@@ -58,8 +58,14 @@
 }
 
 .field input:focus {
-  outline: none;
   border-color: var(--accent);
+}
+
+.hint {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+  text-align: center;
 }
 
 .primary,
@@ -93,6 +99,6 @@
 
 .error {
   margin: 0;
-  color: #b71c1c;
+  color: var(--danger);
   text-align: center;
 }

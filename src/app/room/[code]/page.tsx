@@ -7,7 +7,13 @@ export default async function RoomPage({
 }) {
   const { code } = await params;
   return (
-    <main style={{ padding: "1rem", minHeight: "100dvh" }}>
+    <main
+      style={{
+        padding:
+          "max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left))",
+        minHeight: "100dvh",
+      }}
+    >
       <RoomClient code={code} />
     </main>
   );

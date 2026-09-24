@@ -5,6 +5,7 @@ import {
   HOME_STRETCH,
   SAFE_SET,
   TRACK_CELLS,
+  tokenStackKey,
   tokenSvgPosition,
 } from "@/lib/boardGeometry";
 import { COLOR_HEX, type Color } from "@/lib/player";
@@ -41,20 +42,47 @@ function Star({ x, y }: { x: number; y: number }) {
   );
 }
 
+function stackedPositions(tokens: BoardToken[]) {
+  const groups = new Map<string, BoardToken[]>();
+  for (const t of tokens) {
+    const key = tokenStackKey(t.color, t.index, t.steps);
+    const list = groups.get(key) ?? [];
+    list.push(t);
+    groups.set(key, list);
+  }
+
+  const positions = new Map<string, { x: number; y: number }>();
+  for (const [, group] of groups) {
+    group.sort(
+      (a, b) =>
+        a.color.localeCompare(b.color) || a.index - b.index,
+    );
+    const size = group.length;
+    group.forEach((t, i) => {
+      positions.set(
+        `${t.color}-${t.index}`,
+        tokenSvgPosition(t.color, t.index, t.steps, i, size),
+      );
+    });
+  }
+  return positions;
+}
+
 export function Board({ tokens, selectable = [], myColor, onSelectToken }: Props) {
   const size = 15 * CELL;
+  const positions = stackedPositions(tokens);
+  const interactive = selectable.length > 0 && !!onSelectToken;
 
   return (
     <div className={styles.wrap}>
       <svg
         viewBox={`0 0 ${size} ${size}`}
         className={styles.svg}
-        role="img"
+        role={interactive ? "application" : "img"}
         aria-label="Ludo board"
       >
         <rect width={size} height={size} fill="#f7f3e8" rx={24} />
 
-        {/* Yard bases */}
         {(Object.keys(YARD_RECTS) as Color[]).map((color) => {
           const { x, y } = YARD_RECTS[color];
           return (
@@ -79,11 +107,9 @@ export function Board({ tokens, selectable = [], myColor, onSelectToken }: Props
           );
         })}
 
-        {/* Cross paths background */}
         <rect x={6 * CELL} y={0} width={3 * CELL} height={size} fill="#fff" />
         <rect x={0} y={6 * CELL} width={size} height={3 * CELL} fill="#fff" />
 
-        {/* Track cells */}
         {TRACK_CELLS.map(([c, r], i) => {
           const isStart =
             i === 0 || i === 13 || i === 26 || i === 39;
@@ -109,7 +135,6 @@ export function Board({ tokens, selectable = [], myColor, onSelectToken }: Props
           );
         })}
 
-        {/* Home stretches */}
         {(Object.keys(HOME_STRETCH) as Color[]).map((color) =>
           HOME_STRETCH[color].map(([c, r], i) => (
             <rect
@@ -125,7 +150,6 @@ export function Board({ tokens, selectable = [], myColor, onSelectToken }: Props
           )),
         )}
 
-        {/* Centre triangles */}
         <polygon
           points={`${6 * CELL},${6 * CELL} ${9 * CELL},${6 * CELL} ${7.5 * CELL},${7.5 * CELL}`}
           fill={COLOR_HEX.green}
@@ -143,9 +167,10 @@ export function Board({ tokens, selectable = [], myColor, onSelectToken }: Props
           fill={COLOR_HEX.red}
         />
 
-        {/* Tokens */}
         {tokens.map((t) => {
-          const pos = tokenSvgPosition(t.color, t.index, t.steps);
+          const pos =
+            positions.get(`${t.color}-${t.index}`) ??
+            tokenSvgPosition(t.color, t.index, t.steps);
           const canSelect =
             myColor === t.color && selectable.includes(t.index);
           return (
@@ -153,27 +178,42 @@ export function Board({ tokens, selectable = [], myColor, onSelectToken }: Props
               key={`${t.color}-${t.index}`}
               className={styles.token}
               transform={`translate(${pos.x}, ${pos.y})`}
+              role={canSelect ? "button" : undefined}
+              tabIndex={canSelect ? 0 : undefined}
+              aria-label={
+                canSelect
+                  ? `Move ${t.color} token ${t.index + 1}`
+                  : undefined
+              }
               onClick={() => {
                 if (canSelect && onSelectToken) onSelectToken(t.index);
+              }}
+              onKeyDown={(e) => {
+                if (!canSelect || !onSelectToken) return;
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onSelectToken(t.index);
+                }
               }}
               style={{ cursor: canSelect ? "pointer" : "default" }}
             >
               <g className={canSelect ? styles.selectable : undefined}>
                 {canSelect && (
                   <circle
-                    r={32}
+                    r={36}
                     fill="none"
                     stroke="#111"
                     strokeWidth={3}
                     className={styles.pulse}
                   />
                 )}
+                {canSelect && <circle r={40} fill="transparent" />}
                 <circle r={26} fill="#111" opacity={0.2} cy={3} />
                 <circle
                   r={24}
                   fill={COLOR_HEX[t.color]}
-                  stroke="#fff"
-                  strokeWidth={4}
+                  stroke="#1e1810"
+                  strokeWidth={t.color === "yellow" ? 5 : 4}
                 />
                 <circle r={8} fill="#fff" opacity={0.45} cx={-6} cy={-6} />
               </g>

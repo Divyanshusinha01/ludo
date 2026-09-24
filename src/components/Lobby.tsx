@@ -1,9 +1,18 @@
 "use client";
 
+import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
+import { useRouter } from "next/navigation";
 import { api } from "../../convex/_generated/api";
 import { Id } from "../../convex/_generated/dataModel";
-import { COLOR_HEX, COLOR_LABEL, type Color } from "@/lib/player";
+import { useRoomPresence } from "@/hooks/useRoomPresence";
+import { Button, ErrorText, StatusText } from "./ui";
+import {
+  COLOR_HEX,
+  COLOR_LABEL,
+  formatConvexError,
+  type Color,
+} from "@/lib/player";
 import styles from "./Lobby.module.css";
 
 type Props = {
@@ -13,16 +22,83 @@ type Props = {
 };
 
 export function Lobby({ roomId, clientId, code }: Props) {
-  const data = useQuery(api.rooms.getRoom, { roomId });
+  const router = useRouter();
+  const data = useQuery(api.rooms.getRoom, { roomId, clientId });
   const startGame = useMutation(api.rooms.startGame);
+  const leaveRoom = useMutation(api.rooms.leaveRoom);
+  const kickPlayer = useMutation(api.rooms.kickPlayer);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [kickBusy, setKickBusy] = useState<Color | null>(null);
+
+  useRoomPresence(roomId, clientId);
 
   if (!data) {
-    return <p className={styles.muted}>Loading lobby…</p>;
+    return <StatusText>Loading lobby…</StatusText>;
   }
 
-  const { room, players } = data;
-  const isHost = room.hostClientId === clientId;
-  const canStart = players.length === 4 && isHost;
+  const { room, players, me } = data;
+  const isHost = !!me?.isHost;
+  const canStart = players.length >= 2 && isHost;
+
+  async function onStart() {
+    setError(null);
+    setBusy(true);
+    try {
+      await startGame({ roomId, clientId });
+    } catch (e) {
+      setError(formatConvexError(e, "Could not start"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onLeave() {
+    setBusy(true);
+    try {
+      await leaveRoom({ roomId, clientId });
+      router.push("/");
+    } catch (e) {
+      setError(formatConvexError(e, "Could not leave"));
+      setBusy(false);
+    }
+  }
+
+  async function onKick(color: Color) {
+    setError(null);
+    setKickBusy(color);
+    try {
+      await kickPlayer({ roomId, clientId, targetColor: color });
+    } catch (e) {
+      setError(formatConvexError(e, "Could not remove player"));
+    } finally {
+      setKickBusy(null);
+    }
+  }
+
+  async function onShare() {
+    const shareData = {
+      title: "Family Ludo",
+      text: `Join my Ludo game — code ${code}`,
+      url: typeof window !== "undefined" ? window.location.href : undefined,
+    };
+    try {
+      if (navigator.share) {
+        await navigator.share(shareData);
+        return;
+      }
+    } catch {
+      /* fall through to copy */
+    }
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setError("Could not copy code");
+    }
+  }
 
   return (
     <section className={styles.lobby}>
@@ -30,6 +106,14 @@ export function Lobby({ roomId, clientId, code }: Props) {
         <p className={styles.label}>Room code</p>
         <h1 className={styles.code}>{code}</h1>
         <p className={styles.hint}>Share this code with your family</p>
+        <div className={styles.shareRow}>
+          <Button variant="secondary" onClick={onShare}>
+            {copied ? "Copied!" : "Copy / share"}
+          </Button>
+          <Button variant="secondary" onClick={onLeave} disabled={busy}>
+            Leave
+          </Button>
+        </div>
       </header>
 
       <ul className={styles.list}>
@@ -43,29 +127,56 @@ export function Lobby({ roomId, clientId, code }: Props) {
             >
               <span className={styles.swatch} />
               <div>
-                <strong>{COLOR_LABEL[color]}</strong>
+                <strong>
+                  {COLOR_LABEL[color]}
+                  {p?.isMe ? " (you)" : ""}
+                  {p?.isHost ? " · host" : ""}
+                </strong>
                 <p>{p ? p.name : "Waiting…"}</p>
               </div>
-              <span className={styles.badge}>
-                {p ? (p.connected ? "Online" : "Away") : "Empty"}
-              </span>
+              <div className={styles.seatActions}>
+                <span className={styles.badge}>
+                  {p ? (p.connected ? "Online" : "Away") : "Empty"}
+                </span>
+                {isHost && p && !p.isMe && (
+                  <button
+                    type="button"
+                    className={styles.kick}
+                    disabled={kickBusy === color}
+                    onClick={() => onKick(color)}
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
             </li>
           );
         })}
       </ul>
 
       {isHost ? (
-        <button
-          type="button"
-          className={styles.start}
-          disabled={!canStart}
-          onClick={() => startGame({ roomId, clientId })}
+        <Button
+          variant="ink"
+          disabled={!canStart || busy}
+          onClick={onStart}
+          style={{ width: "100%" }}
         >
-          {players.length === 4 ? "Start game" : `Waiting for players (${players.length}/4)`}
-        </button>
+          {players.length >= 2
+            ? `Start game (${players.length} players)`
+            : `Need at least 2 players (${players.length}/2)`}
+        </Button>
       ) : (
-        <p className={styles.muted}>Waiting for host to start… ({players.length}/4)</p>
+        <p className={styles.muted}>
+          Waiting for host to start… ({players.length} joined)
+        </p>
       )}
+
+      {room.lastEvent && (
+        <p className={styles.event} aria-live="polite">
+          {room.lastEvent}
+        </p>
+      )}
+      <ErrorText>{error}</ErrorText>
     </section>
   );
 }

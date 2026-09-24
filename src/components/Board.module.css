@@ -33,3 +33,14 @@
   0%, 100% { opacity: 0.35; r: 30; }
   50% { opacity: 0.9; r: 36; }
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .token {
+    transition: none;
+  }
+
+  .selectable,
+  .pulse {
+    animation: none;
+  }
+}

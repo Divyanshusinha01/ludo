@@ -1,12 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
+import { useRouter } from "next/navigation";
 import { api } from "../../convex/_generated/api";
 import { Id } from "../../convex/_generated/dataModel";
+import { getLegalMoves } from "../../convex/lib/ludo";
+import { useRoomPresence } from "@/hooks/useRoomPresence";
 import { Board } from "./Board";
 import { Dice } from "./Dice";
-import { COLOR_HEX, COLOR_LABEL, type Color } from "@/lib/player";
+import { Button, ErrorText, StatusText } from "./ui";
+import {
+  COLOR_HEX,
+  COLOR_LABEL,
+  formatConvexError,
+  type Color,
+} from "@/lib/player";
 import styles from "./GameScreen.module.css";
 
 type Props = {
@@ -14,39 +23,50 @@ type Props = {
   clientId: string;
 };
 
+function isNotableEvent(event: string | undefined): boolean {
+  if (!event) return false;
+  return /no moves|three 6s|turn skipped|wins|captured|roll again|left/i.test(
+    event,
+  );
+}
+
 export function GameScreen({ roomId, clientId }: Props) {
-  const data = useQuery(api.rooms.getRoom, { roomId });
-  const legal = useQuery(api.game.getLegalTokenIndexes, { roomId, clientId });
+  const router = useRouter();
+  const data = useQuery(api.rooms.getRoom, { roomId, clientId });
   const rollDice = useMutation(api.game.rollDice);
   const moveToken = useMutation(api.game.moveToken);
-  const heartbeat = useMutation(api.rooms.heartbeat);
-  const markDisconnected = useMutation(api.rooms.markDisconnected);
+  const rematch = useMutation(api.rooms.rematch);
+  const leaveRoom = useMutation(api.rooms.leaveRoom);
   const [rolling, setRolling] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    const tick = () => {
-      void heartbeat({ roomId, clientId });
-    };
-    tick();
-    const id = setInterval(tick, 8000);
-    const onUnload = () => {
-      void markDisconnected({ roomId, clientId });
-    };
-    window.addEventListener("pagehide", onUnload);
-    return () => {
-      clearInterval(id);
-      window.removeEventListener("pagehide", onUnload);
-    };
-  }, [roomId, clientId, heartbeat, markDisconnected]);
+  useRoomPresence(roomId, clientId);
 
-  if (!data) return <p className={styles.muted}>Loading game…</p>;
+  const selectable = useMemo(() => {
+    if (!data?.me || !data.room.diceRolled || data.room.diceValue === null) {
+      return [] as number[];
+    }
+    if (data.me.color !== data.room.currentTurn) return [];
+    if (data.room.status !== "playing") return [];
+    return getLegalMoves(
+      data.tokens.map((t) => ({
+        color: t.color as Color,
+        index: t.index,
+        steps: t.steps,
+      })),
+      data.me.color,
+      data.room.diceValue,
+    );
+  }, [data]);
 
-  const { room, players, tokens } = data;
-  const me = players.find((p) => p.clientId === clientId);
+  if (!data) return <StatusText>Loading game…</StatusText>;
+
+  const { room, players, tokens, me } = data;
   const myTurn = me?.color === room.currentTurn && room.status === "playing";
   const canRoll = myTurn && !room.diceRolled;
-  const selectable = legal ?? [];
+  const turnLabel = COLOR_LABEL[room.currentTurn as Color];
+  const notable = isNotableEvent(room.lastEvent);
 
   async function onRoll() {
     setError(null);
@@ -54,7 +74,7 @@ export function GameScreen({ roomId, clientId }: Props) {
     try {
       await rollDice({ roomId, clientId });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not roll");
+      setError(formatConvexError(e, "Could not roll"));
     } finally {
       setTimeout(() => setRolling(false), 400);
     }
@@ -65,15 +85,50 @@ export function GameScreen({ roomId, clientId }: Props) {
     try {
       await moveToken({ roomId, clientId, tokenIndex });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Illegal move");
+      setError(formatConvexError(e, "Illegal move"));
+    }
+  }
+
+  async function onRematch() {
+    setError(null);
+    setBusy(true);
+    try {
+      await rematch({ roomId, clientId });
+    } catch (e) {
+      setError(formatConvexError(e, "Could not start rematch"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onLeave() {
+    setBusy(true);
+    try {
+      await leaveRoom({ roomId, clientId });
+      router.push("/");
+    } catch (e) {
+      setError(formatConvexError(e, "Could not leave"));
+      setBusy(false);
     }
   }
 
   return (
     <div className={styles.game}>
       <header className={styles.top}>
-        <div>
-          <p className={styles.label}>Room {room.code}</p>
+        <div className={styles.topText}>
+          <div className={styles.topRow}>
+            <p className={styles.label}>Room {room.code}</p>
+            {room.status === "playing" && (
+              <button
+                type="button"
+                className={styles.leaveLink}
+                disabled={busy}
+                onClick={onLeave}
+              >
+                Leave
+              </button>
+            )}
+          </div>
           {room.status === "finished" ? (
             <h2 className={styles.title}>
               {COLOR_LABEL[room.winner as Color]} wins!
@@ -82,33 +137,54 @@ export function GameScreen({ roomId, clientId }: Props) {
             <h2 className={styles.title}>
               <span
                 className={styles.dot}
-                style={{ background: COLOR_HEX[room.currentTurn] }}
+                style={{ background: COLOR_HEX[room.currentTurn as Color] }}
               />
-              {COLOR_LABEL[room.currentTurn]}&apos;s turn
+              {turnLabel}&apos;s turn
               {myTurn ? " — you" : ""}
             </h2>
           )}
-          <p className={styles.event}>{room.lastEvent}</p>
+          <p className={styles.event} aria-live="polite">
+            {room.lastEvent}
+          </p>
         </div>
-        <Dice
-          value={room.diceValue}
-          rolling={rolling}
-          disabled={!canRoll || room.status !== "playing"}
-          onRoll={onRoll}
-        />
+        {room.status === "playing" && (
+          <Dice
+            value={room.diceValue}
+            rolling={rolling}
+            disabled={!canRoll}
+            waitingLabel={
+              canRoll
+                ? undefined
+                : myTurn
+                  ? "Choose a token"
+                  : `Waiting for ${turnLabel}`
+            }
+            onRoll={onRoll}
+          />
+        )}
       </header>
+
+      {notable && room.status === "playing" && (
+        <p className={styles.banner} role="status" aria-live="polite">
+          {room.lastEvent}
+        </p>
+      )}
 
       <ul className={styles.players}>
         {players.map((p) => (
           <li
             key={p._id}
             className={`${styles.player} ${p.color === room.currentTurn ? styles.active : ""}`}
-            style={{ ["--c" as string]: COLOR_HEX[p.color] }}
+            style={{ ["--c" as string]: COLOR_HEX[p.color as Color] }}
           >
             <span className={styles.swatch} />
             <span>
               {p.name}
+              {p.isMe ? " (you)" : ""}
               {!p.connected ? " (away)" : ""}
+              {p.color === room.currentTurn && room.status === "playing"
+                ? " · turn"
+                : ""}
             </span>
           </li>
         ))}
@@ -116,7 +192,7 @@ export function GameScreen({ roomId, clientId }: Props) {
 
       <Board
         tokens={tokens.map((t) => ({
-          color: t.color,
+          color: t.color as Color,
           index: t.index,
           steps: t.steps,
         }))}
@@ -125,10 +201,33 @@ export function GameScreen({ roomId, clientId }: Props) {
         onSelectToken={onSelectToken}
       />
 
-      {myTurn && room.diceRolled && selectable.length > 0 && (
-        <p className={styles.prompt}>Tap a glowing token to move</p>
-      )}
-      {error && <p className={styles.error}>{error}</p>}
+      <div className={styles.controls}>
+        {room.status === "finished" && (
+          <div className={styles.endActions}>
+            {me?.isHost ? (
+              <Button variant="ink" disabled={busy} onClick={onRematch}>
+                Play again
+              </Button>
+            ) : (
+              <p className={styles.waiting}>Waiting for host to rematch…</p>
+            )}
+            <Button variant="secondary" disabled={busy} onClick={onLeave}>
+              Back home
+            </Button>
+          </div>
+        )}
+
+        {myTurn && room.diceRolled && selectable.length > 0 && (
+          <p className={styles.prompt}>Tap a glowing token to move</p>
+        )}
+        {myTurn && !room.diceRolled && room.status === "playing" && (
+          <p className={styles.prompt}>Your turn — roll the dice</p>
+        )}
+        {!myTurn && room.status === "playing" && (
+          <p className={styles.waiting}>Waiting for {turnLabel}…</p>
+        )}
+        <ErrorText>{error}</ErrorText>
+      </div>
     </div>
   );
 }

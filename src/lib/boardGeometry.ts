@@ -1,4 +1,9 @@
 import type { Color } from "./player";
+import {
+  COLOR_START,
+  SAFE_CELLS,
+  stackFanOffset,
+} from "../../convex/lib/ludo";
 
 /** Board is a 15x15 grid. Cell centers in SVG viewBox 0..1500. */
 const CELL = 100;
@@ -87,40 +92,57 @@ export const YARD_SLOTS: Record<Color, Array<[number, number]>> = {
 
 export const CENTRE: [number, number] = [7, 7];
 
-export const SAFE_SET = new Set([0, 8, 13, 21, 26, 34, 39, 47]);
+/** Re-export shared safe cells so board UI matches server rules. */
+export const SAFE_SET = SAFE_CELLS;
 
-export function tokenSvgPosition(
+/** Stable key for tokens that share a visual cell (for fan-out stacking). */
+export function tokenStackKey(
+  color: Color,
+  index: number,
+  steps: number,
+): string {
+  if (steps < 0) return `yard:${color}:${index}`;
+  if (steps === 56) return `fin:${color}`;
+  if (steps >= 51 && steps <= 55) return `home:${color}:${steps}`;
+  const abs = (COLOR_START[color] + steps) % 52;
+  return `track:${abs}`;
+}
+
+/** Base centre of a token before stack fan-out. */
+export function tokenBasePosition(
   color: Color,
   index: number,
   steps: number,
 ): { x: number; y: number } {
   if (steps < 0) {
-    const [c, r] = YARD_SLOTS[color][index]!;
-    return cellCenter(c, r);
+    const slot = YARD_SLOTS[color][index];
+    if (!slot) return cellCenter(7, 7);
+    return cellCenter(slot[0], slot[1]);
   }
   if (steps === 56) {
-    const offsets = [
-      [-18, -18],
-      [18, -18],
-      [-18, 18],
-      [18, 18],
-    ];
-    const [ox, oy] = offsets[index]!;
-    const base = cellCenter(CENTRE[0], CENTRE[1]);
-    return { x: base.x + ox, y: base.y + oy };
+    return cellCenter(CENTRE[0], CENTRE[1]);
   }
   if (steps >= 51 && steps <= 55) {
-    const [c, r] = HOME_STRETCH[color][steps - 51]!;
-    return cellCenter(c, r);
+    const cell = HOME_STRETCH[color][steps - 51];
+    if (!cell) return cellCenter(7, 7);
+    return cellCenter(cell[0], cell[1]);
   }
-  const abs = (startOf(color) + steps) % 52;
+  const abs = (COLOR_START[color] + steps) % 52;
   const cell = TRACK_CELLS[abs];
   if (!cell) return cellCenter(7, 7);
   return cellCenter(cell[0], cell[1]);
 }
 
-function startOf(color: Color): number {
-  return { red: 0, green: 13, yellow: 26, blue: 39 }[color];
+export function tokenSvgPosition(
+  color: Color,
+  index: number,
+  steps: number,
+  stackIndex = 0,
+  stackSize = 1,
+): { x: number; y: number } {
+  const base = tokenBasePosition(color, index, steps);
+  const fan = stackFanOffset(stackIndex, stackSize);
+  return { x: base.x + fan.x, y: base.y + fan.y };
 }
 
-export { CELL, N };
+export { CELL, N, stackFanOffset };

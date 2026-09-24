@@ -15,14 +15,14 @@ const body = DM_Sans({
 
 export const metadata: Metadata = {
   title: "Family Ludo",
-  description: "Play 4-player Ludo online with a room code — no accounts needed.",
+  description: "Play 2–4 player Ludo online with a room code — no accounts needed.",
 };
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
   themeColor: "#e8d9b8",
+  viewportFit: "cover",
 };
 
 export default function RootLayout({

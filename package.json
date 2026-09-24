@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "npm run test:logic",
     "test:logic": "npx tsx scripts/test-ludo-logic.ts",
     "test:integration": "npx tsx scripts/test-integration.ts",
     "test:full-game": "npx tsx scripts/test-full-game.ts"
