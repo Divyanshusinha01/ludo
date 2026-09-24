@@ -41,10 +41,10 @@ async function main() {
       await client.mutation(api.rooms.joinRoom, {
         code,
         clientId: "p2",
-        name: "Green",
+        name: "Yellow",
       })
-    ).color === "green",
-    "p2 green",
+    ).color === "yellow",
+    "p2 opposite house (yellow)",
   );
 
   // 2-player start should work
@@ -73,9 +73,10 @@ async function main() {
   });
   const code4 = create4.code;
   const roomId4 = create4.roomId;
+  // Join order with opposite seating: yellow, then green, then blue
   for (const [id, name] of [
-    ["p2b", "Green"],
-    ["p3", "Yellow"],
+    ["p2b", "Yellow"],
+    ["p3", "Green"],
     ["p4", "Blue"],
   ] as const) {
     await client.mutation(api.rooms.joinRoom, {
@@ -100,10 +101,10 @@ async function main() {
   const recon = await client.mutation(api.rooms.joinRoom, {
     code: code4,
     clientId: "p2b",
-    name: "Green2",
+    name: "Yellow2",
   });
   assert(recon.reconnected === true, "reconnect works");
-  assert(recon.color === "green", "reconnect keeps colour");
+  assert(recon.color === "yellow", "reconnect keeps colour");
 
   await client.mutation(api.rooms.startGame, {
     roomId: roomId4,

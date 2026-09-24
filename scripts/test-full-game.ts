@@ -44,10 +44,11 @@ async function playToCompletion(client: ConvexHttpClient) {
     clientId: "c0",
   });
 
+  // Opposite seating: 2nd joiner gets yellow, then green, then blue
   const colorToClient: Record<string, string> = {
     red: "c0",
-    green: "c1",
-    yellow: "c2",
+    yellow: "c1",
+    green: "c2",
     blue: "c3",
   };
 

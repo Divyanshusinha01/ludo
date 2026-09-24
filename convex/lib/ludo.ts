@@ -2,6 +2,26 @@ export type Color = "red" | "green" | "yellow" | "blue";
 
 export const COLORS: Color[] = ["red", "green", "yellow", "blue"];
 
+/** Opposite houses on the board (classic 2-player seating). */
+export const OPPOSITE_COLOR: Record<Color, Color> = {
+  red: "yellow",
+  yellow: "red",
+  green: "blue",
+  blue: "green",
+};
+
+/**
+ * Next free house. When only one seat is taken, prefer the opposite corner
+ * so a 2-player game sits across the board (red↔yellow / green↔blue).
+ */
+export function pickNextColor(seated: Color[]): Color | undefined {
+  if (seated.length === 1) {
+    const opposite = OPPOSITE_COLOR[seated[0]!];
+    if (!seated.includes(opposite)) return opposite;
+  }
+  return COLORS.find((c) => !seated.includes(c));
+}
+
 export const COLOR_START: Record<Color, number> = {
   red: 0,
   green: 13,

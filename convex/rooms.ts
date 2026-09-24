@@ -7,6 +7,7 @@ import {
   createInitialTokens,
   generateRoomCode,
   nextColorAmong,
+  pickNextColor,
 } from "./lib/ludo";
 import { assertValidClientId, CREATE_RATE_WINDOW_MS } from "./lib/session";
 import { colorValidator } from "./schema";
@@ -259,7 +260,7 @@ export const joinRoom = mutation({
     const seated = (room.seatedColors ?? seatedFromPlayers(players)) as Color[];
     if (seated.length >= 4) throw new Error("Room is full");
 
-    const color = COLORS.find((c) => !seated.includes(c));
+    const color = pickNextColor(seated);
     if (!color) throw new Error("No colour available");
 
     const nextSeated = [...seated, color];

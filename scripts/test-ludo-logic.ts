@@ -8,6 +8,7 @@ import {
   hasWon,
   isBarrierAbsolute,
   nextColorAmong,
+  pickNextColor,
   stackFanOffset,
   tryMoveSteps,
   absoluteTrackPosition,
@@ -98,6 +99,14 @@ function run() {
   );
   assert(hasWon(winners, "blue"), "blue wins");
   assert(!hasWon(winners, "red"), "red not won");
+
+  // Opposite seating for 2-player, then fill remaining in board order
+  assert(pickNextColor(["red"]) === "yellow", "2p: red → yellow");
+  assert(pickNextColor(["green"]) === "blue", "2p: green → blue");
+  assert(pickNextColor(["red", "yellow"]) === "green", "3rd is green");
+  assert(pickNextColor(["red", "yellow", "green"]) === "blue", "4th is blue");
+  assert(pickNextColor(["red", "green", "yellow", "blue"]) === undefined, "full");
+  assert(nextColorAmong("red", ["red", "yellow"]) === "yellow", "2p turn order");
 
   // Roll decision tree (mutation policy)
   assert(
