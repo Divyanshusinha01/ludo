@@ -9,8 +9,9 @@ export type AnimToken = {
   steps: number;
 };
 
-const STEP_MS = 120;
-const CAPTURE_PAUSE_MS = 200;
+/** Per-cell walk duration — keep in sync with Board CSS transition. */
+export const STEP_MS = 70;
+const CAPTURE_PAUSE_MS = 100;
 
 function tokenKey(t: { color: string; index: number }) {
   return `${t.color}-${t.index}`;
@@ -55,6 +56,7 @@ export function useTokenAnimation(serverTokens: AnimToken[]) {
   }>({});
   const prevRef = useRef<AnimToken[]>(serverTokens);
   const chainRef = useRef(Promise.resolve());
+  const generationRef = useRef(0);
   const sig = signature(serverTokens);
 
   useEffect(() => {
@@ -65,6 +67,7 @@ export function useTokenAnimation(serverTokens: AnimToken[]) {
 
     const tokens = serverTokens;
     const snapToServer = () => {
+      generationRef.current += 1;
       prevRef.current = tokens;
       // Defer so we never setState synchronously inside the effect body.
       setTimeout(() => {
@@ -128,7 +131,9 @@ export function useTokenAnimation(serverTokens: AnimToken[]) {
     }
 
     const snapshot = serverTokens;
+    const gen = ++generationRef.current;
     chainRef.current = chainRef.current.then(async () => {
+      if (gen !== generationRef.current) return;
       setAnimating(true);
       let working = [...prevRef.current];
 
@@ -136,10 +141,12 @@ export function useTokenAnimation(serverTokens: AnimToken[]) {
       jobs.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "move" ? -1 : 1));
 
       for (const job of jobs) {
+        if (gen !== generationRef.current) return;
         if (job.kind === "return") {
           setFx({ captureKey: job.key });
           playSound("capture");
           await sleep(CAPTURE_PAUSE_MS);
+          if (gen !== generationRef.current) return;
           working = working.map((t) =>
             tokenKey(t) === job.key ? { ...t, steps: job.to } : t,
           );
@@ -154,16 +161,20 @@ export function useTokenAnimation(serverTokens: AnimToken[]) {
         }
 
         const path = stepsAlongPath(job.from, job.to);
+        let stepIdx = 0;
         for (const step of path) {
+          if (gen !== generationRef.current) return;
           working = working.map((t) =>
             tokenKey(t) === job.key ? { ...t, steps: step } : t,
           );
           setDisplay([...working]);
-          playSound("move");
+          // Sound every other step to avoid audio thrash on mobile.
+          if (stepIdx % 2 === 0) playSound("move");
+          stepIdx += 1;
           if (step === FINISHED_STEPS) {
             setFx({ homeKey: job.key });
             playSound("home");
-            await sleep(STEP_MS + 60);
+            await sleep(STEP_MS + 40);
             setFx({});
           } else {
             await sleep(STEP_MS);
@@ -172,6 +183,7 @@ export function useTokenAnimation(serverTokens: AnimToken[]) {
         setFx({});
       }
 
+      if (gen !== generationRef.current) return;
       prevRef.current = snapshot;
       setDisplay(snapshot);
       setAnimating(false);

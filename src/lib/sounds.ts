@@ -157,10 +157,16 @@ function schedule(kind: SoundKind, ctx: AudioContext) {
 
 export function playSound(kind: SoundKind) {
   if (isMuted() && kind !== "unmute") return;
+  // Fast path: avoid async unlock work on every token step (mobile lag).
+  const ctx = getCtx();
+  if (ctx && ctx.state === "running") {
+    schedule(kind, ctx);
+    return;
+  }
   void unlockAudio().then((ok) => {
     if (!ok) return;
-    const ctx = getCtx();
-    if (!ctx || ctx.state !== "running") return;
-    schedule(kind, ctx);
+    const ready = getCtx();
+    if (!ready || ready.state !== "running") return;
+    schedule(kind, ready);
   });
 }

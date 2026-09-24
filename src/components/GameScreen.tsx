@@ -5,9 +5,16 @@ import { useMutation, useQuery } from "convex/react";
 import { useRouter } from "next/navigation";
 import { api } from "../../convex/_generated/api";
 import { Id } from "../../convex/_generated/dataModel";
-import { getLegalMoves } from "../../convex/lib/ludo";
+import {
+  findCaptureTarget,
+  getLegalMoves,
+  tryMoveSteps,
+} from "../../convex/lib/ludo";
 import { useRoomPresence } from "@/hooks/useRoomPresence";
-import { useTokenAnimation } from "@/hooks/useTokenAnimation";
+import {
+  useTokenAnimation,
+  type AnimToken,
+} from "@/hooks/useTokenAnimation";
 import { haptic } from "@/lib/haptics";
 import { bindAudioUnlock, isMuted, playSound, setMuted } from "@/lib/sounds";
 import { Board } from "./Board";
@@ -25,6 +32,27 @@ type Props = {
   roomId: Id<"rooms">;
   clientId: string;
 };
+
+/** Apply mutation result locally so joiners don't wait on query sync. */
+type LocalDice = {
+  value: number;
+  rolled: boolean;
+  turnId: number;
+};
+
+const ROLL_MIN_SPIN_MS = 280;
+const ROLL_REVEAL_MS = 450;
+
+function tokenSig(tokens: AnimToken[]) {
+  return tokens
+    .map((t) => `${t.color}:${t.index}:${t.steps}`)
+    .sort()
+    .join("|");
+}
+
+function sleep(ms: number) {
+  return new Promise<void>((r) => setTimeout(r, ms));
+}
 
 function isNotableEvent(event: string | undefined): boolean {
   if (!event) return false;
@@ -66,6 +94,12 @@ export function GameScreen({ roomId, clientId }: Props) {
     typeof window !== "undefined" ? isMuted() : false,
   );
   const [offline, setOffline] = useState(false);
+  /** Instant dice UI after roll — avoids waiting for Convex subscription. */
+  const [localDice, setLocalDice] = useState<LocalDice | null>(null);
+  /** Instant token targets after move — animation starts without network wait. */
+  const [optimisticTokens, setOptimisticTokens] = useState<AnimToken[] | null>(
+    null,
+  );
   const lastTurnId = useRef<number | null>(null);
   const winPlayed = useRef(false);
   const rollLock = useRef(false);
@@ -98,7 +132,39 @@ export function GameScreen({ roomId, clientId }: Props) {
     [data?.tokens],
   );
 
-  const { displayTokens, animating, fx } = useTokenAnimation(serverTokens);
+  // Drop local dice once the server subscription catches up (or turn changes).
+  useEffect(() => {
+    if (!data || !localDice) return;
+    if (data.room.turnId !== localDice.turnId) {
+      setLocalDice(null);
+      return;
+    }
+    if (
+      data.room.diceValue === localDice.value &&
+      data.room.diceRolled === localDice.rolled
+    ) {
+      setLocalDice(null);
+    }
+  }, [
+    data?.room.turnId,
+    data?.room.diceValue,
+    data?.room.diceRolled,
+    localDice,
+  ]);
+
+  // Drop optimistic tokens once server matches (or rematch resets length).
+  useEffect(() => {
+    if (!optimisticTokens) return;
+    if (
+      serverTokens.length !== optimisticTokens.length ||
+      tokenSig(serverTokens) === tokenSig(optimisticTokens)
+    ) {
+      setOptimisticTokens(null);
+    }
+  }, [serverTokens, optimisticTokens]);
+
+  const animTokens = optimisticTokens ?? serverTokens;
+  const { displayTokens, animating, fx } = useTokenAnimation(animTokens);
 
   const remainingMs = useTurnCountdown(
     data?.room.turnStartedAt ?? null,
@@ -136,32 +202,29 @@ export function GameScreen({ roomId, clientId }: Props) {
   }, [data?.room.status, data?.room.winner]);
 
   const selectable = useMemo(() => {
-    if (!data?.me || !data.room.diceRolled || data.room.diceValue === null) {
-      return [] as number[];
-    }
+    if (!data?.me) return [] as number[];
+    const rolled = localDice ? localDice.rolled : data.room.diceRolled;
+    const diceValue = localDice ? localDice.value : data.room.diceValue;
+    if (!rolled || diceValue === null) return [] as number[];
     if (data.me.color !== data.room.currentTurn) return [];
     if (data.room.status !== "playing") return [];
-    if (animating) return [];
-    return getLegalMoves(
-      data.tokens.map((t) => ({
-        color: t.color as Color,
-        index: t.index,
-        steps: t.steps,
-      })),
-      data.me.color,
-      data.room.diceValue,
-    );
-  }, [data, animating]);
+    if (animating || optimisticTokens) return [];
+    const tokens = optimisticTokens ?? serverTokens;
+    return getLegalMoves(tokens, data.me.color, diceValue);
+  }, [data, animating, localDice, optimisticTokens, serverTokens]);
 
   if (!data) return <StatusText>Loading game…</StatusText>;
 
   const { room, players, me } = data;
+  const diceValue = localDice ? localDice.value : room.diceValue;
+  const diceRolled = localDice ? localDice.rolled : room.diceRolled;
   const myTurn =
     !!me &&
     me.color === room.currentTurn &&
     room.status === "playing" &&
     !players.find((p) => p.color === me.color)?.eliminated;
-  const canRoll = myTurn && !room.diceRolled && !rolling && !animating;
+  const canRoll =
+    myTurn && !diceRolled && !rolling && !animating && !optimisticTokens;
   const turnLabel = COLOR_LABEL[room.currentTurn as Color];
   const notable = isNotableEvent(room.lastEvent);
   const turnPlayer = players.find((p) => p.color === room.currentTurn);
@@ -189,30 +252,96 @@ export function GameScreen({ roomId, clientId }: Props) {
     setReveal(false);
     haptic("roll");
     playSound("roll");
+    const started = performance.now();
     try {
       const result = await rollDice({
         roomId,
         clientId,
         turnId: room.turnId,
       });
+      // Keep a short spin even on fast networks; never stack extra delay
+      // after a slow round-trip (joiners feel this hardest).
+      const elapsed = performance.now() - started;
+      if (elapsed < ROLL_MIN_SPIN_MS) {
+        await sleep(ROLL_MIN_SPIN_MS - elapsed);
+      }
       if (result.threeSixes) playSound("threeSixes");
+
+      if (result.skipped) {
+        setLocalDice(null);
+      } else if (result.rollAgain) {
+        // Show the 6 briefly, then allow another roll immediately.
+        setLocalDice({
+          value: result.value,
+          rolled: false,
+          turnId: room.turnId,
+        });
+      } else {
+        setLocalDice({
+          value: result.value,
+          rolled: true,
+          turnId: room.turnId,
+        });
+      }
+
       setReveal(true);
-      setTimeout(() => setReveal(false), 700);
+      setTimeout(() => setReveal(false), ROLL_REVEAL_MS);
     } catch (e) {
       setError(formatConvexError(e, "Could not roll"));
+      setLocalDice(null);
     } finally {
-      setTimeout(() => {
-        setRolling(false);
-        rollLock.current = false;
-      }, 450);
+      setRolling(false);
+      rollLock.current = false;
     }
   }
 
   async function onSelectToken(tokenIndex: number) {
-    if (animating || moveLock.current || !myTurn || !room.diceRolled) return;
+    if (
+      animating ||
+      moveLock.current ||
+      !myTurn ||
+      !diceRolled ||
+      diceValue === null ||
+      !me
+    ) {
+      return;
+    }
     moveLock.current = true;
     setError(null);
     haptic("tap");
+
+    // Start the walk immediately — don't wait for the mutation/subscription.
+    const base = optimisticTokens ?? serverTokens;
+    const mover = base.find(
+      (t) => t.color === me.color && t.index === tokenIndex,
+    );
+    const dest =
+      mover && diceValue !== null
+        ? tryMoveSteps(mover.steps, diceValue)
+        : null;
+    if (mover && dest !== null) {
+      const captured = findCaptureTarget(base, me.color, dest);
+      const next = base.map((t) => {
+        if (t.color === me.color && t.index === tokenIndex) {
+          return { ...t, steps: dest };
+        }
+        if (
+          captured &&
+          t.color === captured.color &&
+          t.index === captured.index
+        ) {
+          return { ...t, steps: -1 };
+        }
+        return t;
+      });
+      setOptimisticTokens(next);
+      setLocalDice({
+        value: diceValue,
+        rolled: false,
+        turnId: room.turnId,
+      });
+    }
+
     try {
       const result = await moveToken({
         roomId,
@@ -227,6 +356,12 @@ export function GameScreen({ roomId, clientId }: Props) {
       }
     } catch (e) {
       setError(formatConvexError(e, "Illegal move"));
+      setOptimisticTokens(null);
+      setLocalDice({
+        value: diceValue,
+        rolled: true,
+        turnId: room.turnId,
+      });
     } finally {
       moveLock.current = false;
     }
@@ -447,7 +582,7 @@ export function GameScreen({ roomId, clientId }: Props) {
             {myTurn ? "Your dice" : `${turnLabel}'s dice`}
           </span>
           <Dice
-            value={room.diceValue}
+            value={diceValue}
             rolling={rolling}
             disabled={!canRoll}
             waitingLabel={waitingLabel}
@@ -459,7 +594,11 @@ export function GameScreen({ roomId, clientId }: Props) {
 
       <Board
         tokens={displayTokens}
-        selectable={myTurn && room.diceRolled && !animating ? selectable : []}
+        selectable={
+          myTurn && diceRolled && !animating && !optimisticTokens
+            ? selectable
+            : []
+        }
         myColor={me?.color}
         activeColor={
           room.status === "playing" ? (room.currentTurn as Color) : null
@@ -507,10 +646,10 @@ export function GameScreen({ roomId, clientId }: Props) {
           </div>
         )}
 
-        {myTurn && room.diceRolled && selectable.length > 0 && !animating && (
+        {myTurn && diceRolled && selectable.length > 0 && !animating && (
           <p className={styles.prompt}>Tap a glowing token to move</p>
         )}
-        {myTurn && !room.diceRolled && room.status === "playing" && !animating && (
+        {myTurn && !diceRolled && room.status === "playing" && !animating && (
           <p className={styles.prompt}>Your turn — roll the dice</p>
         )}
         {!myTurn && room.status === "playing" && !turnAway && (

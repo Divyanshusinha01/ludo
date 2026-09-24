@@ -38,7 +38,7 @@ export function Dice({
     const id = setInterval(() => {
       n += 1;
       setSpinFace(1 + (n % 6));
-    }, 70);
+    }, 50);
     return () => clearInterval(id);
   }, [rolling]);
 
