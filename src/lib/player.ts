@@ -18,8 +18,13 @@ export const COLOR_LABEL: Record<Color, string> = {
   blue: "Blue",
 };
 
-/** Session secret — never sent to other clients by the server. */
-const STORAGE_KEY = "ludo_session_id";
+/**
+ * Per-tab seat id. localStorage is shared by every tab on a phone/computer,
+ * so a second window "joining" used to reconnect as the host. Leaving then
+ * removed the only seat and the room code disappeared.
+ */
+const TAB_STORAGE_KEY = "ludo_tab_session";
+const OWNER_STALE_MS = 20_000;
 const CLIENT_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -27,22 +32,108 @@ function isValidClientId(id: string): boolean {
   return id.length <= 64 && CLIENT_ID_RE.test(id);
 }
 
+let tabNonce = "";
+let cachedId = "";
+let heartbeatStarted = false;
+
+function ensureTabNonce(): string {
+  if (!tabNonce) tabNonce = crypto.randomUUID();
+  return tabNonce;
+}
+
+function ownerKey(id: string): string {
+  return `ludo_seat_owner_${id}`;
+}
+
+function readOwner(id: string): { nonce: string; at: number } | null {
+  try {
+    const raw = localStorage.getItem(ownerKey(id));
+    if (!raw) return null;
+    const sep = raw.lastIndexOf(":");
+    if (sep <= 0) return null;
+    const nonce = raw.slice(0, sep);
+    const at = Number(raw.slice(sep + 1));
+    if (!nonce || !Number.isFinite(at)) return null;
+    return { nonce, at };
+  } catch {
+    return null;
+  }
+}
+
+function writeOwner(id: string, at = Date.now()) {
+  try {
+    localStorage.setItem(ownerKey(id), `${ensureTabNonce()}:${at}`);
+  } catch {
+    /* private mode */
+  }
+}
+
+/** Another open tab is already playing as this id (duplicated tab). */
+function ownedByOtherLiveTab(id: string): boolean {
+  const owner = readOwner(id);
+  if (!owner) return false;
+  if (owner.nonce === ensureTabNonce()) return false;
+  if (owner.at <= 0) return false;
+  return Date.now() - owner.at < OWNER_STALE_MS;
+}
+
+function readTabId(): string {
+  try {
+    return sessionStorage.getItem(TAB_STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function persistTabId(id: string) {
+  try {
+    sessionStorage.setItem(TAB_STORAGE_KEY, id);
+  } catch {
+    /* private mode */
+  }
+}
+
+function claim(id: string): boolean {
+  if (ownedByOtherLiveTab(id)) return false;
+  writeOwner(id);
+  const owner = readOwner(id);
+  return !!owner && owner.nonce === ensureTabNonce();
+}
+
+function startOwnerHeartbeat() {
+  if (heartbeatStarted || typeof window === "undefined") return;
+  heartbeatStarted = true;
+  window.setInterval(() => {
+    if (cachedId) writeOwner(cachedId);
+  }, 4000);
+  window.addEventListener("pagehide", () => {
+    // Mark stale so a refresh of this tab can keep the seat, while a
+    // duplicated tab that is still open keeps a fresh timestamp.
+    if (cachedId) writeOwner(cachedId, 0);
+  });
+  window.addEventListener("pageshow", () => {
+    if (cachedId) writeOwner(cachedId);
+  });
+}
+
 export function getOrCreateClientId(): string {
   if (typeof window === "undefined") return "";
-  let id = localStorage.getItem(STORAGE_KEY);
-  // Migrate from older key if present.
-  if (!id) {
-    id = localStorage.getItem("ludo_client_id");
-    if (id) {
-      localStorage.setItem(STORAGE_KEY, id);
-      localStorage.removeItem("ludo_client_id");
-    }
+  if (cachedId) return cachedId;
+  ensureTabNonce();
+
+  const existing = readTabId();
+  if (existing && isValidClientId(existing) && claim(existing)) {
+    cachedId = existing;
+    startOwnerHeartbeat();
+    return cachedId;
   }
-  if (!id || !isValidClientId(id)) {
-    id = crypto.randomUUID();
-    localStorage.setItem(STORAGE_KEY, id);
-  }
-  return id;
+
+  const fresh = crypto.randomUUID();
+  cachedId = fresh;
+  persistTabId(fresh);
+  writeOwner(fresh);
+  startOwnerHeartbeat();
+  return cachedId;
 }
 
 export function useSessionId(): string {
