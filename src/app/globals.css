@@ -1,0 +1,40 @@
+:root {
+  --ink: #1e1810;
+  --muted: #6b5e4a;
+  --accent: #f0a202;
+  --accent-ink: #8a4b08;
+  --bg-top: #f3e6c8;
+  --bg-bottom: #d9c49a;
+  --font-display: "Fraunces", Georgia, serif;
+  --font-body: "DM Sans", system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  font-family: var(--font-body);
+  color: var(--ink);
+  background:
+    radial-gradient(ellipse 90% 60% at 10% 0%, #fff6df 0%, transparent 55%),
+    radial-gradient(ellipse 70% 50% at 100% 20%, #f0c36a55 0%, transparent 50%),
+    linear-gradient(165deg, var(--bg-top), var(--bg-bottom));
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: inherit;
+}
+
+button,
+input {
+  font: inherit;
+}
