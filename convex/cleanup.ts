@@ -88,33 +88,21 @@ export const tick = internalMutation({
       const humans = refreshed.filter((p) => !p.isBot);
       const connectedHumans = humans.filter((p) => p.connected);
 
-      // Vs-computer: abandon when no human is connected (bots must not keep the room alive).
-      if (room.vsComputer) {
-        if (connectedHumans.length === 0) {
-          const newestHumanSeen = humans.reduce(
-            (max, p) => Math.max(max, p.lastSeenAt),
-            0,
-          );
-          if (now - newestHumanSeen > PLAYING_ABANDON_MS) {
-            await deleteRoomCascade(ctx, room._id);
-            continue;
-          }
-        }
-        // Skip underpopulated auto-win — one human + bots is the normal shape.
-        continue;
-      }
-
-      const allDisconnected =
-        refreshed.length === 0 || refreshed.every((p) => !p.connected);
-      if (allDisconnected) {
-        const newestSeen = refreshed.reduce(
-          (max, p) => Math.max(max, p.lastSeenAt),
-          0,
-        );
-        if (now - newestSeen > PLAYING_ABANDON_MS) {
+      // No connected humans — abandon after grace (bots alone must not keep the room).
+      if (connectedHumans.length === 0) {
+        const newestHumanSeen =
+          humans.length > 0
+            ? humans.reduce((max, p) => Math.max(max, p.lastSeenAt), 0)
+            : refreshed.reduce((max, p) => Math.max(max, p.lastSeenAt), 0);
+        if (now - newestHumanSeen > PLAYING_ABANDON_MS) {
           await deleteRoomCascade(ctx, room._id);
           continue;
         }
+      }
+
+      // Vs-computer / solo-shaped: skip underpopulated auto-win.
+      if (room.vsComputer) {
+        continue;
       }
 
       const connected = refreshed.filter((p) => p.connected && !p.isBot);

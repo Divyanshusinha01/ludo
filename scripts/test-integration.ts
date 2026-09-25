@@ -508,11 +508,96 @@ async function main() {
   );
   mark("outsider cannot roll");
 
-  console.log("\n=== 8. Brief pause for action interval ===");
+  console.log("\n=== 8. Lobby bots (mixed human + computer) ===");
+  const botHost = sid();
+  const botGuest = sid();
+  const botRoom = await client.mutation(api.rooms.createRoom, {
+    clientId: botHost,
+    name: "BotHost",
+  });
+  await client.mutation(api.rooms.addBot, {
+    roomId: botRoom.roomId,
+    clientId: botHost,
+  });
+  let botState = await client.query(api.rooms.getRoom, {
+    roomId: botRoom.roomId,
+    clientId: botHost,
+  });
+  assert(botState, "bot lobby exists");
+  assert(botState!.players.length === 2, "host + 1 bot");
+  assert(
+    botState!.players.some((p) => p.isBot && p.name === "Computer"),
+    "bot seat named Computer",
+  );
+  mark("host can add computer in lobby");
+
+  await client.mutation(api.rooms.joinRoom, {
+    code: botRoom.code,
+    clientId: botGuest,
+    name: "Guest",
+  });
+  botState = await client.query(api.rooms.getRoom, {
+    roomId: botRoom.roomId,
+    clientId: botHost,
+  });
+  assert(botState!.players.length === 3, "host + bot + guest");
+  await expectReject("non-host add bot", () =>
+    client.mutation(api.rooms.addBot, {
+      roomId: botRoom.roomId,
+      clientId: botGuest,
+    }),
+    "host",
+  );
+  mark("only host can add computer");
+
+  const botColor = botState!.players.find((p) => p.isBot)!.color;
+  await client.mutation(api.rooms.kickPlayer, {
+    roomId: botRoom.roomId,
+    clientId: botHost,
+    targetColor: botColor,
+  });
+  botState = await client.query(api.rooms.getRoom, {
+    roomId: botRoom.roomId,
+    clientId: botHost,
+  });
+  assert(!botState!.players.some((p) => p.isBot), "bot removed");
+  mark("host can remove computer");
+
+  await client.mutation(api.rooms.addBot, {
+    roomId: botRoom.roomId,
+    clientId: botHost,
+  });
+  await client.mutation(api.rooms.startGame, {
+    roomId: botRoom.roomId,
+    clientId: botHost,
+  });
+  botState = await client.query(api.rooms.getRoom, {
+    roomId: botRoom.roomId,
+    clientId: botHost,
+  });
+  assert(botState!.room.status === "playing", "mixed game started");
+  assert(botState!.players.filter((p) => p.isBot).length === 1, "1 bot in play");
+  assert(botState!.players.filter((p) => !p.isBot).length === 2, "2 humans");
+  assert(botState!.tokens.length === 12, "3 seats × 4 tokens");
+  mark("start with humans + bot");
+
+  // Wait for possible bot turn scheduling (BOT_THINK_MS = 700)
+  await sleep(900);
+  botState = await client.query(api.rooms.getRoom, {
+    roomId: botRoom.roomId,
+    clientId: botHost,
+  });
+  assert(
+    botState!.room.status === "playing" || botState!.room.status === "finished",
+    "game still valid after bot think window",
+  );
+  mark("bot turn scheduler does not break room");
+
+  console.log("\n=== 9. Brief pause for action interval ===");
   await sleep(120);
 
   console.log(`\nIntegration tests passed (${passed.length} checks).`);
-  console.log("Rooms:", code, code4, fr.code, nameRoom.code);
+  console.log("Rooms:", code, code4, fr.code, nameRoom.code, botRoom.code);
 }
 
 main().catch((e) => {

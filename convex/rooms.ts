@@ -161,6 +161,39 @@ function seatedFromPlayers(players: Doc<"players">[]): Color[] {
   return COLORS.filter((c) => players.some((p) => p.color === c)) as Color[];
 }
 
+/** Next host among humans only — bots must never become host. */
+function pickNextHumanHost(
+  players: Doc<"players">[],
+): Doc<"players"> | null {
+  const humans = players
+    .filter((p) => !p.isBot && !p.eliminated)
+    .sort((a, b) => COLORS.indexOf(a.color) - COLORS.indexOf(b.color));
+  return humans[0] ?? null;
+}
+
+function playableHumans(players: Doc<"players">[]): Doc<"players">[] {
+  return players.filter(
+    (p) => !p.isBot && !p.eliminated && p.finishRank == null,
+  );
+}
+
+async function deleteRoomCascade(
+  ctx: MutationCtx,
+  roomId: Id<"rooms">,
+) {
+  const players = await ctx.db
+    .query("players")
+    .withIndex("by_room", (q) => q.eq("roomId", roomId))
+    .collect();
+  for (const p of players) await ctx.db.delete(p._id);
+  const tokens = await ctx.db
+    .query("tokens")
+    .withIndex("by_room", (q) => q.eq("roomId", roomId))
+    .collect();
+  for (const t of tokens) await ctx.db.delete(t._id);
+  await ctx.db.delete(roomId);
+}
+
 async function resetBoard(
   ctx: MutationCtx,
   roomId: Id<"rooms">,
@@ -380,6 +413,86 @@ export const createVsComputer = mutation({
   },
 });
 
+export const addBot = mutation({
+  args: {
+    roomId: v.id("rooms"),
+    clientId: v.string(),
+  },
+  returns: v.object({
+    color: colorValidator,
+  }),
+  handler: async (ctx, args) => {
+    const clientId = assertValidClientId(args.clientId);
+    const room = await ctx.db.get(args.roomId);
+    if (!room) fail(GameError.roomNotFound);
+    if (room.hostClientId !== clientId) fail(GameError.onlyHost);
+    if (room.status !== "lobby") fail(GameError.gameStarted);
+    if (room.vsComputer) fail(GameError.vsComputerOnly);
+
+    await requirePlayer(ctx, args.roomId, clientId);
+
+    const players = await ctx.db
+      .query("players")
+      .withIndex("by_room", (q) => q.eq("roomId", args.roomId))
+      .collect();
+    if (players.length >= 4) fail(GameError.roomFull);
+
+    const seated = (room.seatedColors ?? seatedFromPlayers(players)) as Color[];
+    if (seated.length >= 4) fail(GameError.roomFull);
+
+    const color = pickNextColor(seated);
+    if (!color) fail(GameError.roomFull);
+
+    const botIndex = players.filter((p) => p.isBot).length;
+    const name = botDisplayName(botIndex);
+    const now = Date.now();
+    const nextSeated = [...seated, color];
+
+    await ctx.db.patch(args.roomId, {
+      seatedColors: nextSeated,
+      lastActivityAt: now,
+      lastEvent: `${name} joined`,
+    });
+
+    await ctx.db.insert("players", {
+      roomId: args.roomId,
+      clientId: botClientId(args.roomId, color),
+      name,
+      color,
+      connected: true,
+      lastSeenAt: now,
+      joinedAt: now,
+      lives: MAX_TIMEOUT_LIVES,
+      eliminated: false,
+      isBot: true,
+    });
+
+    // Defend against rare double-insert same colour.
+    const sameColor = await ctx.db
+      .query("players")
+      .withIndex("by_room_color", (q) =>
+        q.eq("roomId", args.roomId).eq("color", color),
+      )
+      .collect();
+    if (sameColor.length > 1) {
+      const mine = sameColor.find((p) => p.isBot && p.color === color);
+      if (mine) await ctx.db.delete(mine._id);
+      await ctx.db.patch(args.roomId, {
+        seatedColors: seatedFromPlayers(
+          await ctx.db
+            .query("players")
+            .withIndex("by_room", (q) => q.eq("roomId", args.roomId))
+            .collect(),
+        ),
+      });
+      fail(GameError.rateLimited);
+    }
+
+    logEvent("bot_added", { roomCode: room.code, color, clientId });
+    return { color };
+  },
+});
+
 export const joinRoom = mutation({
   args: {
     code: v.string(),
@@ -594,17 +707,7 @@ export const leaveRoom = mutation({
 
     // Solo vs-computer: human leaving ends the room (bots alone are useless).
     if (room.vsComputer && !player.isBot) {
-      const allPlayers = await ctx.db
-        .query("players")
-        .withIndex("by_room", (q) => q.eq("roomId", args.roomId))
-        .collect();
-      for (const p of allPlayers) await ctx.db.delete(p._id);
-      const tokens = await ctx.db
-        .query("tokens")
-        .withIndex("by_room", (q) => q.eq("roomId", args.roomId))
-        .collect();
-      for (const t of tokens) await ctx.db.delete(t._id);
-      await ctx.db.delete(args.roomId);
+      await deleteRoomCascade(ctx, args.roomId);
       return { emptied: true };
     }
 
@@ -658,26 +761,25 @@ export const leaveRoom = mutation({
         ...withEvent(room, leaveText, now),
       };
 
+      // No playable humans left — tear down (bots must not finish alone).
+      if (playableHumans(remaining).length === 0) {
+        await deleteRoomCascade(ctx, args.roomId);
+        return { emptied: true };
+      }
+
       const hostStillSeated = remaining.some(
         (p) =>
           p.clientId === room.hostClientId &&
-          !p.eliminated,
+          !p.eliminated &&
+          !p.isBot,
       );
-      if (!hostStillSeated && stillSeated.length > 0) {
-        const nextHost = stillSeated.sort(
-          (a, b) => COLORS.indexOf(a.color) - COLORS.indexOf(b.color),
-        )[0]!;
-        patches.hostClientId = nextHost.clientId;
+      if (!hostStillSeated) {
+        const nextHost = pickNextHumanHost(stillSeated);
+        if (nextHost) patches.hostClientId = nextHost.clientId;
       }
 
       if (stillSeated.length === 0) {
-        const tok = await ctx.db
-          .query("tokens")
-          .withIndex("by_room", (q) => q.eq("roomId", args.roomId))
-          .collect();
-        for (const t of tok) await ctx.db.delete(t._id);
-        for (const p of remaining) await ctx.db.delete(p._id);
-        await ctx.db.delete(args.roomId);
+        await deleteRoomCascade(ctx, args.roomId);
         return { emptied: true };
       }
 
@@ -817,6 +919,10 @@ export const leaveRoom = mutation({
           internal.game.handleTurnTimeout,
           { roomId: args.roomId, turnId },
         );
+        await ctx.scheduler.runAfter(BOT_THINK_MS, internal.game.playBotTurn, {
+          roomId: args.roomId,
+          turnId,
+        });
         return { emptied: false };
       }
 
@@ -831,13 +937,8 @@ export const leaveRoom = mutation({
       .withIndex("by_room", (q) => q.eq("roomId", args.roomId))
       .collect();
 
-    if (remaining.length === 0) {
-      const tokens = await ctx.db
-        .query("tokens")
-        .withIndex("by_room", (q) => q.eq("roomId", args.roomId))
-        .collect();
-      for (const t of tokens) await ctx.db.delete(t._id);
-      await ctx.db.delete(args.roomId);
+    if (remaining.length === 0 || !remaining.some((p) => !p.isBot)) {
+      await deleteRoomCascade(ctx, args.roomId);
       return { emptied: true };
     }
 
@@ -853,11 +954,11 @@ export const leaveRoom = mutation({
       lastActivityAt: now,
     };
     if (room.hostClientId === clientId) {
-      const nextHost = remaining.sort(
-        (a, b) => COLORS.indexOf(a.color) - COLORS.indexOf(b.color),
-      )[0]!;
-      patches.hostClientId = nextHost.clientId;
-      patches.lastEvent = `${player.name} left — ${nextHost.name} is host`;
+      const nextHost = pickNextHumanHost(remaining);
+      if (nextHost) {
+        patches.hostClientId = nextHost.clientId;
+        patches.lastEvent = `${player.name} left — ${nextHost.name} is host`;
+      }
     }
     await ctx.db.patch(args.roomId, patches);
     return { emptied: false };
@@ -1007,6 +1108,9 @@ export const rematch = mutation({
       .withIndex("by_room", (q) => q.eq("roomId", args.roomId))
       .collect();
     if (remaining.length < 2) {
+      fail(GameError.needPlayers);
+    }
+    if (!remaining.some((p) => !p.isBot)) {
       fail(GameError.needPlayers);
     }
 

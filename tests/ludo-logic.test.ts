@@ -461,4 +461,15 @@ describe("bot move picker", () => {
     const tokens = createInitialTokens(["red", "yellow"]);
     expect(pickBotMove(tokens, "red", 3)).toBeNull();
   });
+
+  it("prefers a safe landing over a farther unsafe advance", () => {
+    // Token 0: steps 20 + 3 → 23 (unsafe). Token 1: steps 5 + 3 → 8 (safe).
+    const tokens = [
+      { color: "red" as const, index: 0, steps: 20 },
+      { color: "red" as const, index: 1, steps: 5 },
+      { color: "red" as const, index: 2, steps: -1 },
+      { color: "red" as const, index: 3, steps: -1 },
+    ];
+    expect(pickBotMove(tokens, "red", 3)).toBe(1);
+  });
 });

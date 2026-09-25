@@ -3,8 +3,10 @@ import {
   FINISHED_STEPS,
   HOME_ENTRY_STEPS,
   TokenState,
+  absoluteTrackPosition,
   findCaptureTarget,
   getLegalMoves,
+  isSafeAbsolute,
   tryMoveSteps,
 } from "./ludo";
 
@@ -25,7 +27,7 @@ export function botDisplayName(botIndex: number): string {
 
 /**
  * Pick a legal token index. Prefers capture → finish → enter home stretch →
- * leave yard → advance the farthest token on track.
+ * leave yard → safe landings → advance the farthest token on track.
  */
 export function pickBotMove(
   tokens: TokenState[],
@@ -50,6 +52,8 @@ export function pickBotMove(
     if (dest === FINISHED_STEPS) score += 800;
     if (token.steps < HOME_ENTRY_STEPS && dest >= HOME_ENTRY_STEPS) score += 400;
     if (token.steps === -1) score += 200;
+    const abs = absoluteTrackPosition(color, dest);
+    if (abs !== null && isSafeAbsolute(abs)) score += 150;
     // Prefer advancing tokens already on the board / home stretch.
     score += Math.max(0, dest);
     // Slight preference for lower index on ties (stable).

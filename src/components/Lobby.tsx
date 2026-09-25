@@ -30,16 +30,20 @@ export function Lobby({ data, roomId, clientId, code }: Props) {
   const startGame = useMutation(api.rooms.startGame);
   const leaveRoom = useMutation(api.rooms.leaveRoom);
   const kickPlayer = useMutation(api.rooms.kickPlayer);
+  const addBot = useMutation(api.rooms.addBot);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
   const [kickBusy, setKickBusy] = useState<Color | null>(null);
+  const [addBotBusy, setAddBotBusy] = useState(false);
 
   useRoomPresence(roomId, clientId);
 
   const { room, players, me } = data;
   const isHost = !!me?.isHost;
   const canStart = players.length >= 2 && isHost;
+  const canAddBot =
+    isHost && !room.vsComputer && players.length < 4 && !addBotBusy && !busy;
 
   async function onStart() {
     setError(null);
@@ -73,6 +77,18 @@ export function Lobby({ data, roomId, clientId, code }: Props) {
       setError(formatConvexError(e, "Could not remove player"));
     } finally {
       setKickBusy(null);
+    }
+  }
+
+  async function onAddBot() {
+    setError(null);
+    setAddBotBusy(true);
+    try {
+      await addBot({ roomId, clientId });
+    } catch (e) {
+      setError(formatConvexError(e, "Could not add computer"));
+    } finally {
+      setAddBotBusy(false);
     }
   }
 
@@ -130,12 +146,19 @@ export function Lobby({ data, roomId, clientId, code }: Props) {
                   {COLOR_LABEL[color]}
                   {p?.isMe ? " (you)" : ""}
                   {p?.isHost ? " · host" : ""}
+                  {p?.isBot ? " · computer" : ""}
                 </strong>
                 <p>{p ? p.name : "Waiting…"}</p>
               </div>
               <div className={styles.seatActions}>
                 <span className={styles.badge}>
-                  {p ? (p.connected ? "Online" : "Away") : "Empty"}
+                  {p
+                    ? p.isBot
+                      ? "Computer"
+                      : p.connected
+                        ? "Online"
+                        : "Away"
+                    : "Empty"}
                 </span>
                 {isHost && p && !p.isMe && (
                   <button
@@ -152,6 +175,21 @@ export function Lobby({ data, roomId, clientId, code }: Props) {
           );
         })}
       </ul>
+
+      {isHost && !room.vsComputer && (
+        <Button
+          variant="secondary"
+          disabled={!canAddBot}
+          onClick={onAddBot}
+          style={{ width: "100%" }}
+        >
+          {players.length >= 4
+            ? "Room full"
+            : addBotBusy
+              ? "Adding…"
+              : "Add computer"}
+        </Button>
+      )}
 
       {isHost ? (
         <Button
