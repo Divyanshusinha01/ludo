@@ -72,6 +72,61 @@ export function buildFinalRankings(
   return rankings;
 }
 
+/**
+ * True when exactly one seat can still play and at least one other seat
+ * finished by completing home. Ranking can no longer change — the remaining
+ * player is the automatic last-place loser (N players → end after N−1 finishers).
+ *
+ * Does NOT fire when every other seat was eliminated/forfeited (that case is
+ * a sole-survivor win, not a last-place assignment).
+ */
+export function shouldAssignAutomaticLoser(
+  players: Array<{ eliminated?: boolean; finishRank?: number | null }>,
+): boolean {
+  const playable = players.filter(
+    (p) => !p.eliminated && p.finishRank == null,
+  );
+  if (playable.length !== 1) return false;
+  return players.some(
+    (p) => !p.eliminated && p.finishRank != null,
+  );
+}
+
+/** Label shown under #rank inside a finished player's house. */
+export function rankHouseLabel(
+  rank: number,
+  playerCount: number,
+): "WINNER" | "LOSE" | null {
+  if (rank === 1) return "WINNER";
+  if (playerCount > 0 && rank === playerCount) return "LOSE";
+  return null;
+}
+
+/**
+ * Among candidate token centres, pick the one whose hit circle contains
+ * `point` and is closest to the pointer (stable tie-break by index).
+ * Does not rely on SVG paint order.
+ */
+export function resolveTokenHit(
+  point: { x: number; y: number },
+  candidates: Array<{ index: number; x: number; y: number }>,
+  hitRadius: number = 44,
+): number | null {
+  let best: { index: number; dist: number } | null = null;
+  for (const c of candidates) {
+    const dist = Math.hypot(point.x - c.x, point.y - c.y);
+    if (dist > hitRadius) continue;
+    if (
+      !best ||
+      dist < best.dist ||
+      (dist === best.dist && c.index < best.index)
+    ) {
+      best = { index: c.index, dist };
+    }
+  }
+  return best?.index ?? null;
+}
+
 /** Ambiguity-free charset for room codes (no 0/O/1/I). */
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -395,8 +450,8 @@ export function stackFanOffset(
   stackSize: number,
 ): { x: number; y: number } {
   if (stackSize <= 1) return { x: 0, y: 0 };
-  // Wider fan so overlapping tokens stay tappable on mobile.
-  const radius = stackSize === 2 ? 22 : stackSize === 3 ? 26 : 30;
+  // Wider fan so overlapping tokens keep distinct hit areas on mobile.
+  const radius = stackSize === 2 ? 28 : stackSize === 3 ? 32 : 36;
   const angle =
     (Math.PI * 2 * indexInStack) / stackSize - Math.PI / 2;
   return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };

@@ -13,7 +13,10 @@ import {
   legalIndexesAtSameCell,
   nextColorAmong,
   pickNextColor,
+  rankHouseLabel,
+  resolveTokenHit,
   rollFairDice,
+  shouldAssignAutomaticLoser,
   snapshotTokens,
   stackFanOffset,
   startsSixStreak,
@@ -183,6 +186,72 @@ describe("win and roll policy", () => {
         { color: "green", finishRank: 2 },
       ]),
     ).toEqual(["blue", "green", "red"]);
+  });
+
+  it("ends after N−1 home finishers (automatic last-place loser)", () => {
+    // 2 players: first finisher → remaining is loser
+    expect(
+      shouldAssignAutomaticLoser([
+        { eliminated: false, finishRank: 1 },
+        { eliminated: false, finishRank: null },
+      ]),
+    ).toBe(true);
+
+    // 3 players: only 1 finisher → continue
+    expect(
+      shouldAssignAutomaticLoser([
+        { eliminated: false, finishRank: 1 },
+        { eliminated: false, finishRank: null },
+        { eliminated: false, finishRank: null },
+      ]),
+    ).toBe(false);
+
+    // 3 players: 2 finishers → remaining is loser
+    expect(
+      shouldAssignAutomaticLoser([
+        { eliminated: false, finishRank: 1 },
+        { eliminated: false, finishRank: 2 },
+        { eliminated: false, finishRank: null },
+      ]),
+    ).toBe(true);
+
+    // 4 players: 3 finishers → remaining is loser
+    expect(
+      shouldAssignAutomaticLoser([
+        { eliminated: false, finishRank: 1 },
+        { eliminated: false, finishRank: 2 },
+        { eliminated: false, finishRank: 3 },
+        { eliminated: false, finishRank: null },
+      ]),
+    ).toBe(true);
+
+    // Sole survivor via eliminations is NOT an automatic loser
+    expect(
+      shouldAssignAutomaticLoser([
+        { eliminated: true, finishRank: 2 },
+        { eliminated: true, finishRank: 3 },
+        { eliminated: false, finishRank: null },
+      ]),
+    ).toBe(false);
+  });
+
+  it("labels house ranks as WINNER / LOSE", () => {
+    expect(rankHouseLabel(1, 2)).toBe("WINNER");
+    expect(rankHouseLabel(2, 2)).toBe("LOSE");
+    expect(rankHouseLabel(2, 4)).toBe(null);
+    expect(rankHouseLabel(4, 4)).toBe("LOSE");
+    expect(rankHouseLabel(1, 4)).toBe("WINNER");
+  });
+
+  it("resolves overlapping token hits by nearest centre", () => {
+    const a = { index: 0, x: 100, y: 100 };
+    const b = { index: 1, x: 128, y: 100 }; // 28px apart (2-stack fan)
+    // Click nearer to B
+    expect(resolveTokenHit({ x: 120, y: 100 }, [a, b], 48)).toBe(1);
+    // Click nearer to A
+    expect(resolveTokenHit({ x: 105, y: 100 }, [a, b], 48)).toBe(0);
+    // Outside both hit circles
+    expect(resolveTokenHit({ x: 300, y: 300 }, [a, b], 48)).toBe(null);
   });
 });
 

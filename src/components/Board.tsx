@@ -1,5 +1,6 @@
 "use client";
 
+import { useCallback, useRef, type PointerEvent } from "react";
 import {
   CELL,
   HOME_STRETCH,
@@ -9,6 +10,10 @@ import {
   tokenSvgPosition,
 } from "@/lib/boardGeometry";
 import { COLOR_HEX, type Color } from "@/lib/player";
+import {
+  rankHouseLabel,
+  resolveTokenHit,
+} from "../../convex/lib/ludo";
 import styles from "./Board.module.css";
 
 export type BoardToken = {
@@ -17,14 +22,19 @@ export type BoardToken = {
   steps: number;
 };
 
+/** Invisible hit radius in SVG units — large enough for fingers. */
+const TOKEN_HIT_RADIUS = 48;
+
 type Props = {
   tokens: BoardToken[];
   selectable?: number[];
   myColor?: Color | null;
   /** Colour whose tokens should subtly glow (current turn). */
   activeColor?: Color | null;
-  /** Finish ranks keyed by colour (1–4) for completed players. */
+  /** Finish ranks keyed by colour (1–4) for completed / ranked players. */
   finishRanks?: Partial<Record<Color, number>>;
+  /** Seated player count — used for WINNER / LOSE house labels. */
+  playerCount?: number;
   fx?: {
     captureKey?: string;
     homeKey?: string;
@@ -85,17 +95,40 @@ function stackedPositions(tokens: BoardToken[]) {
   return positions;
 }
 
+function clientToSvg(
+  svg: SVGSVGElement,
+  clientX: number,
+  clientY: number,
+): { x: number; y: number } {
+  const pt = svg.createSVGPoint();
+  pt.x = clientX;
+  pt.y = clientY;
+  const ctm = svg.getScreenCTM();
+  if (!ctm) {
+    const rect = svg.getBoundingClientRect();
+    const vb = svg.viewBox.baseVal;
+    return {
+      x: ((clientX - rect.left) / rect.width) * vb.width,
+      y: ((clientY - rect.top) / rect.height) * vb.height,
+    };
+  }
+  const local = pt.matrixTransform(ctm.inverse());
+  return { x: local.x, y: local.y };
+}
+
 export function Board({
   tokens,
   selectable = [],
   myColor,
   activeColor,
   finishRanks = {},
+  playerCount = 0,
   fx,
   onSelectToken,
 }: Props) {
   const size = 15 * CELL;
   const positions = stackedPositions(tokens);
+  const svgRef = useRef<SVGSVGElement>(null);
   const interactive = selectable.length > 0 && !!onSelectToken;
 
   // Stack sizes for visual badges on overlapping tokens.
@@ -114,13 +147,51 @@ export function Board({
     }
   }
 
+  const pickSelectableAt = useCallback(
+    (clientX: number, clientY: number): number | null => {
+      if (!interactive || !onSelectToken || !myColor) return null;
+      const svg = svgRef.current;
+      if (!svg) return null;
+      const point = clientToSvg(svg, clientX, clientY);
+      const candidates = tokens
+        .filter(
+          (t) => t.color === myColor && selectable.includes(t.index),
+        )
+        .map((t) => {
+          const pos =
+            positions.get(`${t.color}-${t.index}`) ??
+            tokenSvgPosition(t.color, t.index, t.steps);
+          return { index: t.index, x: pos.x, y: pos.y };
+        });
+      return resolveTokenHit(point, candidates, TOKEN_HIT_RADIUS);
+    },
+    [interactive, myColor, onSelectToken, positions, selectable, tokens],
+  );
+
+  const handlePointer = useCallback(
+    (e: PointerEvent<SVGSVGElement>) => {
+      if (!interactive || !onSelectToken) return;
+      // Only primary button / touch.
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      const hit = pickSelectableAt(e.clientX, e.clientY);
+      if (hit == null) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onSelectToken(hit);
+    },
+    [interactive, onSelectToken, pickSelectableAt],
+  );
+
   return (
     <div className={styles.wrap}>
       <svg
+        ref={svgRef}
         viewBox={`0 0 ${size} ${size}`}
         className={styles.svg}
         role={interactive ? "application" : "img"}
         aria-label="Ludo board"
+        style={interactive ? { cursor: "pointer" } : undefined}
+        onPointerDown={handlePointer}
       >
         <rect width={size} height={size} fill="#f7f3e8" rx={24} />
 
@@ -128,6 +199,8 @@ export function Board({
           const { x, y } = YARD_RECTS[color];
           const rank = finishRanks[color];
           const badge = RANK_BADGE[color];
+          const label =
+            rank != null ? rankHouseLabel(rank, playerCount) : null;
           return (
             <g key={color}>
               <rect
@@ -150,26 +223,33 @@ export function Board({
               {rank != null && (
                 <g
                   className={styles.rankBadge}
-                  aria-label={`${color} finished rank ${rank}`}
+                  aria-label={
+                    label
+                      ? `${color} rank ${rank} ${label}`
+                      : `${color} finished rank ${rank}`
+                  }
                 >
                   <text
                     x={badge.x}
-                    y={badge.y - 18}
+                    y={label ? badge.y - 18 : badge.y}
                     textAnchor="middle"
+                    dominantBaseline={label ? undefined : "central"}
                     className={styles.rankHash}
                     fill={COLOR_HEX[color]}
                   >
                     #{rank}
                   </text>
-                  <text
-                    x={badge.x}
-                    y={badge.y + 22}
-                    textAnchor="middle"
-                    className={styles.rankLabel}
-                    fill="#1e1810"
-                  >
-                    FINISHED
-                  </text>
+                  {label && (
+                    <text
+                      x={badge.x}
+                      y={badge.y + 22}
+                      textAnchor="middle"
+                      className={styles.rankLabel}
+                      fill="#1e1810"
+                    >
+                      {label}
+                    </text>
+                  )}
                 </g>
               )}
             </g>
@@ -279,26 +359,9 @@ export function Board({
               key={key}
               className={`${styles.token} ${fxClass ?? ""}`}
               transform={`translate(${pos.x}, ${pos.y})`}
-              role={canSelect ? "button" : undefined}
-              tabIndex={canSelect ? 0 : undefined}
-              aria-label={
-                canSelect
-                  ? `Move ${t.color} token ${t.index + 1}`
-                  : undefined
-              }
-              onClick={(e) => {
-                if (!canSelect || !onSelectToken) return;
-                e.stopPropagation();
-                onSelectToken(t.index);
-              }}
-              onKeyDown={(e) => {
-                if (!canSelect || !onSelectToken) return;
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  onSelectToken(t.index);
-                }
-              }}
-              style={{ cursor: canSelect ? "pointer" : "default" }}
+              // Hit testing is geometric on the SVG; tokens are visual only.
+              style={{ pointerEvents: "none" }}
+              aria-hidden={!canSelect}
             >
               <g
                 className={`${canSelect ? styles.selectable : ""} ${isActiveTurn && !canSelect ? styles.turnGlow : ""}`}
@@ -322,8 +385,10 @@ export function Board({
                     opacity={0.7}
                   />
                 )}
-                {/* Generous invisible hit target so stacked tokens stay tappable */}
-                {canSelect && <circle r={44} fill="transparent" />}
+                {/* Visual-only generous target ring (selection uses resolveTokenHit) */}
+                {canSelect && (
+                  <circle r={TOKEN_HIT_RADIUS} fill="transparent" />
+                )}
                 <circle
                   r={shadowR}
                   fill="#111"

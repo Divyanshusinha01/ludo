@@ -21,6 +21,7 @@ import {
   MAX_TIMEOUT_LIVES,
   nextColorAmong,
   rollFairDice,
+  shouldAssignAutomaticLoser,
   snapshotTokens,
   startsSixStreak,
   TokenSnapshot,
@@ -198,8 +199,7 @@ async function returnTokensToYard(
 
 /**
  * When only one colour is still playing and every other seat was eliminated
- * (not finished by completing home), they win. Players who already finished
- * by bringing all tokens home do not trigger this — the last seat must play out.
+ * (not finished by completing home), they win.
  */
 async function maybeFinishSoleSurvivor(
   ctx: MutationCtx,
@@ -244,6 +244,60 @@ async function maybeFinishSoleSurvivor(
     roomCode: room.code,
     winner: sole.color,
     reason: "sole_survivor",
+  });
+  return true;
+}
+
+/**
+ * After N−1 home finishers, the one remaining player can no longer change
+ * the ranking — assign them last place (loser) and end the match.
+ */
+async function maybeFinishAutomaticLoser(
+  ctx: MutationCtx,
+  room: Doc<"rooms">,
+  players: Doc<"players">[],
+  now: number,
+): Promise<boolean> {
+  if (!shouldAssignAutomaticLoser(players)) return false;
+
+  const loser = players.find(
+    (p) => !p.eliminated && p.finishRank == null,
+  );
+  if (!loser) return false;
+
+  const rankings = [...(room.rankings ?? [])];
+  if (!rankings.includes(loser.color as Color)) {
+    rankings.push(loser.color as Color);
+  }
+  // Ensure every seated colour appears exactly once (eliminated seats too).
+  for (const p of players) {
+    if (!rankings.includes(p.color as Color)) {
+      rankings.push(p.color as Color);
+    }
+  }
+
+  const loserRank = rankings.indexOf(loser.color as Color) + 1;
+  await ctx.db.patch(loser._id, { finishRank: loserRank });
+
+  const winner = rankings[0] ?? room.winner ?? null;
+  await ctx.db.patch(room._id, {
+    status: "finished",
+    winner,
+    rankings,
+    diceRolled: false,
+    sixStreakSnapshot: null,
+    finishedAt: now,
+    lastActivityAt: now,
+    ...withEvent(
+      room,
+      `${loser.name} places #${loserRank} — match over`,
+      now,
+    ),
+  });
+  logEvent("game_finished", {
+    roomCode: room.code,
+    winner,
+    reason: "automatic_loser",
   });
   return true;
 }
@@ -302,8 +356,8 @@ async function maybeFinishAllRanked(
 }
 
 /**
- * Record a home-finish rank without ending the match early. Returns the new
- * rankings array. No-ops (returns existing) if already ranked.
+ * Record a home-finish rank. Match may end immediately once N−1 players
+ * have finished (remaining seat becomes automatic loser).
  */
 async function assignFinishRank(
   ctx: MutationCtx,
@@ -684,6 +738,19 @@ async function executeMove(
 
     const refreshedRoom = (await ctx.db.get(roomId))!;
     const refreshedPlayers = await seatedPlayers(ctx, roomId);
+
+    if (await maybeFinishAutomaticLoser(ctx, refreshedRoom, refreshedPlayers, now)) {
+      return {
+        won: true,
+        matchOver: true,
+        rank,
+        captured: !!captured,
+        reachedHome,
+        leftYard,
+        fromSteps,
+        toSteps: dest,
+      };
+    }
 
     if (await maybeFinishAllRanked(ctx, refreshedRoom, refreshedPlayers, now)) {
       return {

@@ -11,6 +11,7 @@ import {
   MAX_TIMEOUT_LIVES,
   nextColorAmong,
   pickNextColor,
+  shouldAssignAutomaticLoser,
   TURN_TIMEOUT_MS,
 } from "./lib/ludo";
 import { BOT_THINK_MS, botClientId, botDisplayName } from "./lib/bot";
@@ -680,9 +681,7 @@ export const leaveRoom = mutation({
         return { emptied: true };
       }
 
-      // Sole remaining active seat wins only when everyone else forfeited
-      // (finished-by-home players are not "active" but keep the match going
-      // until the last unfinished seat completes — handled in game.ts).
+      // Sole remaining active seat wins only when everyone else forfeited.
       if (playable.length === 1 && remaining.every((p) => p._id === playable[0]!._id || p.eliminated)) {
         const sole = playable[0]!;
         const rankings = buildFinalRankings(
@@ -715,6 +714,43 @@ export const leaveRoom = mutation({
           roomCode: room.code,
           winner: sole.color,
           reason: "forfeit",
+        });
+        return { emptied: false };
+      }
+
+      // N−1 home finishers already ranked — remaining seat is automatic loser.
+      if (shouldAssignAutomaticLoser(remaining)) {
+        const loser = playable[0]!;
+        const rankings = [...(room.rankings ?? [])];
+        if (!rankings.includes(loser.color as Color)) {
+          rankings.push(loser.color as Color);
+        }
+        for (const p of remaining) {
+          if (!rankings.includes(p.color as Color)) {
+            rankings.push(p.color as Color);
+          }
+        }
+        const loserRank = rankings.indexOf(loser.color as Color) + 1;
+        await ctx.db.patch(loser._id, { finishRank: loserRank });
+        patches.status = "finished";
+        patches.winner = rankings[0] ?? room.winner;
+        patches.finishedAt = now;
+        patches.diceRolled = false;
+        patches.rankings = rankings;
+        patches.sixStreakSnapshot = null;
+        Object.assign(
+          patches,
+          withEvents(
+            room,
+            [leaveText, `${loser.name} places #${loserRank} — match over`],
+            now,
+          ),
+        );
+        await ctx.db.patch(args.roomId, patches);
+        logEvent("game_finished", {
+          roomCode: room.code,
+          winner: rankings[0] ?? null,
+          reason: "automatic_loser",
         });
         return { emptied: false };
       }

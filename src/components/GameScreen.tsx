@@ -8,7 +8,6 @@ import { Id } from "../../convex/_generated/dataModel";
 import {
   findCaptureTarget,
   getLegalMoves,
-  legalIndexesAtSameCell,
   tryMoveSteps,
 } from "../../convex/lib/ludo";
 import { useRoomPresence } from "@/hooks/useRoomPresence";
@@ -97,11 +96,6 @@ export function GameScreen({ data, roomId, clientId }: Props) {
   const [optimisticTokens, setOptimisticTokens] = useState<AnimToken[] | null>(
     null,
   );
-  /** When multiple legal tokens share a cell, player must pick one. */
-  const [tokenPicker, setTokenPicker] = useState<{
-    turnKey: string;
-    indexes: number[];
-  } | null>(null);
   const lastTurnId = useRef<number | null>(null);
   const winPlayed = useRef(false);
   const rollLock = useRef(false);
@@ -205,14 +199,6 @@ export function GameScreen({ data, roomId, clientId }: Props) {
     }
   }, [data.room.status, data.room.winner]);
 
-  const pickerTurnKey = `${data.room.turnId}:${
-    localDice ? localDice.value : data.room.diceValue
-  }:${localDice ? localDice.rolled : data.room.diceRolled}`;
-  const activePicker =
-    tokenPicker && tokenPicker.turnKey === pickerTurnKey
-      ? tokenPicker.indexes
-      : null;
-
   const selectable = useMemo(() => {
     if (!data.me) return [] as number[];
     const rolled = localDice ? localDice.rolled : data.room.diceRolled;
@@ -230,7 +216,7 @@ export function GameScreen({ data, roomId, clientId }: Props) {
   const finishRanks = useMemo(() => {
     const ranks: Partial<Record<Color, number>> = {};
     for (const p of data.players) {
-      if (p.finishRank != null && !p.eliminated) {
+      if (p.finishRank != null) {
         ranks[p.color as Color] = p.finishRank;
       }
     }
@@ -309,7 +295,6 @@ export function GameScreen({ data, roomId, clientId }: Props) {
     if (!canRoll || rollLock.current) return;
     rollLock.current = true;
     setError(null);
-    setTokenPicker(null);
     setRolling(true);
     setReveal(false);
     haptic("roll");
@@ -388,7 +373,6 @@ export function GameScreen({ data, roomId, clientId }: Props) {
     }
     moveLock.current = true;
     setError(null);
-    setTokenPicker(null);
     haptic("tap");
 
     await applyOptimisticMove(tokenIndex, diceValue);
@@ -427,21 +411,7 @@ export function GameScreen({ data, roomId, clientId }: Props) {
     ) {
       return;
     }
-
-    const tokens = optimisticTokens ?? serverTokens;
-    const atCell = legalIndexesAtSameCell(
-      tokens,
-      me.color,
-      selectable,
-      tokenIndex,
-    );
-
-    if (atCell.length > 1) {
-      // Multiple legal tokens on this cell — show an explicit picker.
-      setTokenPicker({ turnKey: pickerTurnKey, indexes: atCell });
-      return;
-    }
-
+    // Explicit token id from geometric hit-test — never infer from stack order.
     await commitMove(tokenIndex);
   }
 
@@ -480,9 +450,7 @@ export function GameScreen({ data, roomId, clientId }: Props) {
     : myTurn
       ? animating
         ? "Moving…"
-        : activePicker
-          ? "Choose which token"
-          : "Choose a token"
+        : "Choose a token"
       : turnAway
         ? `${turnLabel} is away`
         : `Waiting for ${turnLabel}`;
@@ -708,36 +676,11 @@ export function GameScreen({ data, roomId, clientId }: Props) {
             room.status === "playing" ? (room.currentTurn as Color) : null
           }
           finishRanks={finishRanks}
+          playerCount={players.length}
           fx={fx}
           onSelectToken={onSelectToken}
         />
       </div>
-
-      {activePicker && myTurn && diceRolled && (
-        <div className={styles.picker} role="dialog" aria-label="Choose token">
-          <p className={styles.pickerTitle}>Which token?</p>
-          <div className={styles.pickerRow}>
-            {activePicker.map((index) => (
-              <button
-                key={index}
-                type="button"
-                className={styles.pickerBtn}
-                style={{ ["--c" as string]: COLOR_HEX[me!.color as Color] }}
-                onClick={() => void commitMove(index)}
-              >
-                Token {index + 1}
-              </button>
-            ))}
-            <button
-              type="button"
-              className={styles.pickerCancel}
-              onClick={() => setTokenPicker(null)}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
 
       <div className={styles.controls}>
         {room.status === "finished" && (
@@ -749,16 +692,24 @@ export function GameScreen({ data, roomId, clientId }: Props) {
                 : rankedPlayers.map((p) => p.color)
               ).map((color, i) => {
                 const p = players.find((x) => x.color === color);
-                const isWinner = color === room.winner;
+                const place = i + 1;
+                const isWinner = color === room.winner || place === 1;
+                const isLoser = place === players.length;
                 return (
                   <li
                     key={color}
                     style={{ ["--c" as string]: COLOR_HEX[color as Color] }}
                   >
-                    <span className={styles.rankNum}>{i + 1}</span>
+                    <span className={styles.rankNum}>{place}</span>
                     <span className={styles.swatch} />
                     {p?.name ?? COLOR_LABEL[color as Color]}
-                    {isWinner ? " · winner" : p?.eliminated ? " · out" : ""}
+                    {isWinner
+                      ? " · winner"
+                      : isLoser
+                        ? " · lose"
+                        : p?.eliminated
+                          ? " · out"
+                          : ""}
                   </li>
                 );
               })}
@@ -791,13 +742,9 @@ export function GameScreen({ data, roomId, clientId }: Props) {
         {myTurn &&
           diceRolled &&
           selectable.length > 0 &&
-          !animating &&
-          !activePicker && (
+          !animating && (
             <p className={styles.prompt}>Tap a glowing token to move</p>
           )}
-        {myTurn && activePicker && (
-          <p className={styles.prompt}>Overlapping tokens — pick one below</p>
-        )}
         {myTurn && !diceRolled && room.status === "playing" && !animating && (
           <p className={styles.prompt}>Your turn — roll the dice</p>
         )}
