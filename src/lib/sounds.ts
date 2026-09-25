@@ -114,7 +114,8 @@ export type SoundKind =
   | "win"
   | "timeout"
   | "threeSixes"
-  | "unmute";
+  | "unmute"
+  | "chat";
 
 function schedule(kind: SoundKind, ctx: AudioContext) {
   switch (kind) {
@@ -151,6 +152,10 @@ function schedule(kind: SoundKind, ctx: AudioContext) {
       break;
     case "unmute":
       beep(ctx, 660, 70, "sine", 0.07);
+      break;
+    case "chat":
+      beep(ctx, 740, 55, "sine", 0.055);
+      beep(ctx, 990, 70, "sine", 0.05, 0.07);
       break;
   }
 }

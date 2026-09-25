@@ -226,7 +226,16 @@ export function RoomClient({
       ) : (
         <GameScreen data={data} roomId={data.room._id} clientId={clientId} />
       )}
-      <ChatPanel roomId={data.room._id} clientId={clientId} />
+      <ChatPanel
+        roomId={data.room._id}
+        clientId={clientId}
+        players={data.players.map((p) => ({
+          name: p.name,
+          color: p.color,
+          isMe: p.isMe,
+          isBot: p.isBot,
+        }))}
+      />
     </>
   );
 }

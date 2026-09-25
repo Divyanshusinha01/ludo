@@ -131,6 +131,8 @@ export default defineSchema({
     color: colorValidator,
     text: v.string(),
     createdAt: v.number(),
+    /** Seat colours mentioned via @Name in text (optional for older rows). */
+    mentionedColors: v.optional(v.array(colorValidator)),
   })
     .index("by_room", ["roomId"])
     .index("by_room_createdAt", ["roomId", "createdAt"]),
