@@ -40,6 +40,22 @@ async function uniqueCode(ctx: MutationCtx): Promise<string> {
   throw new Error("Could not generate room code");
 }
 
+/** Newest hosted room only — avoid scanning every room this client ever created. */
+async function assertCreateNotRateLimited(
+  ctx: MutationCtx,
+  clientId: string,
+  now: number,
+) {
+  const latest = await ctx.db
+    .query("rooms")
+    .withIndex("by_host", (q) => q.eq("hostClientId", clientId))
+    .order("desc")
+    .first();
+  if (latest && now - latest.createdAt < CREATE_RATE_WINDOW_MS) {
+    fail(GameError.rateLimited);
+  }
+}
+
 function publicRoom(room: Doc<"rooms">) {
   return {
     _id: room._id,
@@ -155,18 +171,18 @@ async function resetBoard(
     .query("tokens")
     .withIndex("by_room", (q) => q.eq("roomId", roomId))
     .collect();
-  for (const t of existingTokens) {
-    await ctx.db.delete(t._id);
-  }
+  await Promise.all(existingTokens.map((t) => ctx.db.delete(t._id)));
 
-  for (const token of createInitialTokens(activeColors)) {
-    await ctx.db.insert("tokens", {
-      roomId,
-      color: token.color,
-      index: token.index,
-      steps: token.steps,
-    });
-  }
+  await Promise.all(
+    createInitialTokens(activeColors).map((token) =>
+      ctx.db.insert("tokens", {
+        roomId,
+        color: token.color,
+        index: token.index,
+        steps: token.steps,
+      }),
+    ),
+  );
 
   const firstTurn = activeColors[0]!;
   const turnId = 1;
@@ -188,6 +204,7 @@ async function resetBoard(
     diceRolled: false,
     consecutiveSixes: 0,
     lastMovedTokenIndex: null,
+    sixStreakSnapshot: null,
     turnId,
     turnStartedAt: now,
     winner: null,
@@ -197,13 +214,15 @@ async function resetBoard(
   });
 
   const players = playersForNames;
-  for (const p of players) {
-    await ctx.db.patch(p._id, {
-      lives: MAX_TIMEOUT_LIVES,
-      eliminated: false,
-      finishRank: undefined,
-    });
-  }
+  await Promise.all(
+    players.map((p) =>
+      ctx.db.patch(p._id, {
+        lives: MAX_TIMEOUT_LIVES,
+        eliminated: false,
+        finishRank: undefined,
+      }),
+    ),
+  );
 
   await ctx.scheduler.runAfter(TURN_TIMEOUT_MS, internal.game.handleTurnTimeout, {
     roomId,
@@ -234,14 +253,7 @@ export const createRoom = mutation({
     const name = sanitizePlayerName(args.name);
     const now = Date.now();
 
-    const hosted = await ctx.db
-      .query("rooms")
-      .withIndex("by_host", (q) => q.eq("hostClientId", clientId))
-      .collect();
-    const recent = hosted.some(
-      (r) => now - r.createdAt < CREATE_RATE_WINDOW_MS,
-    );
-    if (recent) fail(GameError.rateLimited);
+    await assertCreateNotRateLimited(ctx, clientId, now);
 
     const code = await uniqueCode(ctx);
     const color = COLORS[0]!;
@@ -292,14 +304,7 @@ export const createVsComputer = mutation({
     if (botCount < 1 || botCount > 3) fail(GameError.invalidBotCount);
 
     const now = Date.now();
-    const hosted = await ctx.db
-      .query("rooms")
-      .withIndex("by_host", (q) => q.eq("hostClientId", clientId))
-      .collect();
-    const recent = hosted.some(
-      (r) => now - r.createdAt < CREATE_RATE_WINDOW_MS,
-    );
-    if (recent) fail(GameError.rateLimited);
+    await assertCreateNotRateLimited(ctx, clientId, now);
 
     const code = await uniqueCode(ctx);
     const hostColor = COLORS[0]!;
@@ -334,23 +339,27 @@ export const createVsComputer = mutation({
     });
 
     const seated: Color[] = [hostColor];
+    const botInserts: Promise<Id<"players">>[] = [];
     for (let i = 0; i < botCount; i++) {
       const color = pickNextColor(seated);
       if (!color) break;
       seated.push(color);
-      await ctx.db.insert("players", {
-        roomId,
-        clientId: botClientId(roomId, color),
-        name: botDisplayName(i),
-        color,
-        connected: true,
-        lastSeenAt: now,
-        joinedAt: now,
-        lives: MAX_TIMEOUT_LIVES,
-        eliminated: false,
-        isBot: true,
-      });
+      botInserts.push(
+        ctx.db.insert("players", {
+          roomId,
+          clientId: botClientId(roomId, color),
+          name: botDisplayName(i),
+          color,
+          connected: true,
+          lastSeenAt: now,
+          joinedAt: now,
+          lives: MAX_TIMEOUT_LIVES,
+          eliminated: false,
+          isBot: true,
+        }),
+      );
     }
+    await Promise.all(botInserts);
 
     await resetBoard(
       ctx,
@@ -424,10 +433,12 @@ export const joinRoom = mutation({
       fail(GameError.gameStarted);
     }
 
+    // Bound the scan — only need enough recent seats to enforce the join cap.
     const mySeats = await ctx.db
       .query("players")
       .withIndex("by_client", (q) => q.eq("clientId", clientId))
-      .collect();
+      .order("desc")
+      .take(MAX_JOINS_PER_WINDOW + 2);
     const recentJoins = mySeats.filter(
       (p) => now - (p.joinedAt ?? 0) < JOIN_RATE_WINDOW_MS,
     );
@@ -608,8 +619,11 @@ export const leaveRoom = mutation({
         .query("players")
         .withIndex("by_room", (q) => q.eq("roomId", args.roomId))
         .collect();
-      const playableBefore = allPlayers.filter((p) => !p.eliminated);
-      const place = playableBefore.length; // first to leave = last place
+      const playableBefore = allPlayers.filter(
+        (p) => !p.eliminated && p.finishRank == null,
+      );
+      const place =
+        (room.rankings?.length ?? 0) + playableBefore.length; // later leavers get worse ranks after finishers
 
       await ctx.db.patch(player._id, {
         eliminated: true,
@@ -631,7 +645,10 @@ export const leaveRoom = mutation({
         .query("players")
         .withIndex("by_room", (q) => q.eq("roomId", args.roomId))
         .collect();
-      const playable = remaining.filter((p) => !p.eliminated);
+      const playable = remaining.filter(
+        (p) => !p.eliminated && p.finishRank == null,
+      );
+      const stillSeated = remaining.filter((p) => !p.eliminated);
       const seated = seatedFromPlayers(remaining);
       const leaveText = `${player.name} left the game`;
       const patches: Record<string, unknown> = {
@@ -641,16 +658,18 @@ export const leaveRoom = mutation({
       };
 
       const hostStillSeated = remaining.some(
-        (p) => p.clientId === room.hostClientId && !p.eliminated,
+        (p) =>
+          p.clientId === room.hostClientId &&
+          !p.eliminated,
       );
-      if (!hostStillSeated && playable.length > 0) {
-        const nextHost = playable.sort(
+      if (!hostStillSeated && stillSeated.length > 0) {
+        const nextHost = stillSeated.sort(
           (a, b) => COLORS.indexOf(a.color) - COLORS.indexOf(b.color),
         )[0]!;
         patches.hostClientId = nextHost.clientId;
       }
 
-      if (playable.length === 0) {
+      if (stillSeated.length === 0) {
         const tok = await ctx.db
           .query("tokens")
           .withIndex("by_room", (q) => q.eq("roomId", args.roomId))
@@ -661,7 +680,10 @@ export const leaveRoom = mutation({
         return { emptied: true };
       }
 
-      if (playable.length === 1) {
+      // Sole remaining active seat wins only when everyone else forfeited
+      // (finished-by-home players are not "active" but keep the match going
+      // until the last unfinished seat completes — handled in game.ts).
+      if (playable.length === 1 && remaining.every((p) => p._id === playable[0]!._id || p.eliminated)) {
         const sole = playable[0]!;
         const rankings = buildFinalRankings(
           room.rankings ?? [],
@@ -679,6 +701,7 @@ export const leaveRoom = mutation({
         patches.finishedAt = now;
         patches.diceRolled = false;
         patches.rankings = rankings;
+        patches.sixStreakSnapshot = null;
         Object.assign(
           patches,
           withEvents(
@@ -696,7 +719,40 @@ export const leaveRoom = mutation({
         return { emptied: false };
       }
 
-      if (room.currentTurn === color) {
+      // Everyone finished or left — close the match.
+      if (playable.length === 0) {
+        const rankings =
+          (room.rankings ?? []).length > 0
+            ? [...(room.rankings ?? [])]
+            : remaining
+                .filter((p) => p.finishRank != null)
+                .sort(
+                  (a, b) => (a.finishRank ?? 99) - (b.finishRank ?? 99),
+                )
+                .map((p) => p.color as Color);
+        for (const p of remaining) {
+          if (!rankings.includes(p.color as Color)) {
+            rankings.push(p.color as Color);
+          }
+        }
+        patches.status = "finished";
+        patches.winner = rankings[0] ?? room.winner;
+        patches.finishedAt = now;
+        patches.diceRolled = false;
+        patches.rankings = rankings;
+        patches.sixStreakSnapshot = null;
+        Object.assign(
+          patches,
+          withEvents(room, [leaveText, "Match complete"], now),
+        );
+        await ctx.db.patch(args.roomId, patches);
+        return { emptied: false };
+      }
+
+      if (
+        room.currentTurn === color ||
+        !playable.some((p) => p.color === room.currentTurn)
+      ) {
         const nextTurn = nextColorAmong(
           color,
           playable.map((p) => p.color as Color),
@@ -713,6 +769,7 @@ export const leaveRoom = mutation({
         patches.turnId = turnId;
         patches.turnStartedAt = now;
         patches.lastMovedTokenIndex = null;
+        patches.sixStreakSnapshot = null;
         Object.assign(
           patches,
           withEvents(room, [leaveText, turnText], now),

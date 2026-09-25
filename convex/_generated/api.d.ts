@@ -13,6 +13,7 @@ import type * as crons from "../crons.js";
 import type * as game from "../game.js";
 import type * as lib_bot from "../lib/bot.js";
 import type * as lib_errors from "../lib/errors.js";
+import type * as lib_events from "../lib/events.js";
 import type * as lib_log from "../lib/log.js";
 import type * as lib_ludo from "../lib/ludo.js";
 import type * as lib_session from "../lib/session.js";
@@ -30,6 +31,7 @@ declare const fullApi: ApiFromModules<{
   game: typeof game;
   "lib/bot": typeof lib_bot;
   "lib/errors": typeof lib_errors;
+  "lib/events": typeof lib_events;
   "lib/log": typeof lib_log;
   "lib/ludo": typeof lib_ludo;
   "lib/session": typeof lib_session;

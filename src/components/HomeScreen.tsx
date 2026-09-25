@@ -45,7 +45,7 @@ export function HomeScreen() {
     try {
       storeName(trimmed);
       const res = await createRoom({ clientId, name: trimmed });
-      router.push(`/room/${res.code}`);
+      router.push(`/room/${res.code}?rid=${res.roomId}`);
     } catch (err) {
       setError(formatConvexError(err, "Failed to create"));
     } finally {
@@ -70,7 +70,7 @@ export function HomeScreen() {
         name: trimmed,
         botCount,
       });
-      router.push(`/room/${res.code}`);
+      router.push(`/room/${res.code}?rid=${res.roomId}`);
     } catch (err) {
       setError(formatConvexError(err, "Failed to start"));
     } finally {

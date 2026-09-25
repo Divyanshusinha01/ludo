@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import { useRouter } from "next/navigation";
 import { api } from "../../convex/_generated/api";
 import { Id } from "../../convex/_generated/dataModel";
 import {
   findCaptureTarget,
   getLegalMoves,
+  legalIndexesAtSameCell,
   tryMoveSteps,
 } from "../../convex/lib/ludo";
 import { useRoomPresence } from "@/hooks/useRoomPresence";
@@ -19,16 +20,18 @@ import { haptic } from "@/lib/haptics";
 import { bindAudioUnlock, isMuted, playSound, setMuted } from "@/lib/sounds";
 import { Board } from "./Board";
 import { Dice } from "./Dice";
-import { Button, ErrorText, StatusText } from "./ui";
+import { Button, ErrorText } from "./ui";
 import {
   COLOR_HEX,
   COLOR_LABEL,
   formatConvexError,
   type Color,
 } from "@/lib/player";
+import type { RoomBundle } from "./Lobby";
 import styles from "./GameScreen.module.css";
 
 type Props = {
+  data: RoomBundle;
   roomId: Id<"rooms">;
   clientId: string;
 };
@@ -42,6 +45,8 @@ type LocalDice = {
 
 const ROLL_MIN_SPIN_MS = 280;
 const ROLL_REVEAL_MS = 450;
+/** Brief pause after dice reveal before a server auto-move animates. */
+const AUTO_MOVE_DELAY_MS = 380;
 
 function tokenSig(tokens: AnimToken[]) {
   return tokens
@@ -72,9 +77,8 @@ function useTurnCountdown(
   return Math.max(0, turnStartedAt + timeoutMs - now);
 }
 
-export function GameScreen({ roomId, clientId }: Props) {
+export function GameScreen({ data, roomId, clientId }: Props) {
   const router = useRouter();
-  const data = useQuery(api.rooms.getRoom, { roomId, clientId });
   const rollDice = useMutation(api.game.rollDice);
   const moveToken = useMutation(api.game.moveToken);
   const rematch = useMutation(api.rooms.rematch);
@@ -93,6 +97,11 @@ export function GameScreen({ roomId, clientId }: Props) {
   const [optimisticTokens, setOptimisticTokens] = useState<AnimToken[] | null>(
     null,
   );
+  /** When multiple legal tokens share a cell, player must pick one. */
+  const [tokenPicker, setTokenPicker] = useState<{
+    turnKey: string;
+    indexes: number[];
+  } | null>(null);
   const lastTurnId = useRef<number | null>(null);
   const winPlayed = useRef(false);
   const rollLock = useRef(false);
@@ -117,31 +126,32 @@ export function GameScreen({ roomId, clientId }: Props) {
 
   const serverTokens = useMemo(
     () =>
-      (data?.tokens ?? []).map((t) => ({
+      data.tokens.map((t) => ({
         color: t.color as Color,
         index: t.index,
         steps: t.steps,
       })),
-    [data?.tokens],
+    [data.tokens],
   );
 
   // Drop local dice once the server subscription catches up (or turn changes).
   useEffect(() => {
-    if (!data || !localDice) return;
+    if (!localDice) return;
     if (data.room.turnId !== localDice.turnId) {
-      setLocalDice(null);
-      return;
+      const id = setTimeout(() => setLocalDice(null), 0);
+      return () => clearTimeout(id);
     }
     if (
       data.room.diceValue === localDice.value &&
       data.room.diceRolled === localDice.rolled
     ) {
-      setLocalDice(null);
+      const id = setTimeout(() => setLocalDice(null), 0);
+      return () => clearTimeout(id);
     }
   }, [
-    data?.room.turnId,
-    data?.room.diceValue,
-    data?.room.diceRolled,
+    data.room.turnId,
+    data.room.diceValue,
+    data.room.diceRolled,
     localDice,
   ]);
 
@@ -152,7 +162,8 @@ export function GameScreen({ roomId, clientId }: Props) {
       serverTokens.length !== optimisticTokens.length ||
       tokenSig(serverTokens) === tokenSig(optimisticTokens)
     ) {
-      setOptimisticTokens(null);
+      const id = setTimeout(() => setOptimisticTokens(null), 0);
+      return () => clearTimeout(id);
     }
   }, [serverTokens, optimisticTokens]);
 
@@ -160,14 +171,14 @@ export function GameScreen({ roomId, clientId }: Props) {
   const { displayTokens, animating, fx } = useTokenAnimation(animTokens);
 
   const remainingMs = useTurnCountdown(
-    data?.room.turnStartedAt ?? null,
-    data?.room.turnTimeoutMs ?? 60_000,
-    data?.room.status === "playing",
+    data.room.turnStartedAt ?? null,
+    data.room.turnTimeoutMs ?? 60_000,
+    data.room.status === "playing",
   );
 
   // Turn-start beep when turnId changes
   useEffect(() => {
-    if (!data || data.room.status !== "playing") return;
+    if (data.room.status !== "playing") return;
     const tid = data.room.turnId;
     if (lastTurnId.current === null) {
       lastTurnId.current = tid;
@@ -184,37 +195,55 @@ export function GameScreen({ roomId, clientId }: Props) {
 
   // Win sound (once)
   useEffect(() => {
-    if (data?.room.status === "finished" && data.room.winner && !winPlayed.current) {
+    if (data.room.status === "finished" && data.room.winner && !winPlayed.current) {
       winPlayed.current = true;
       playSound("win");
       haptic("win");
     }
-    if (data?.room.status === "playing") {
+    if (data.room.status === "playing") {
       winPlayed.current = false;
     }
-  }, [data?.room.status, data?.room.winner]);
+  }, [data.room.status, data.room.winner]);
+
+  const pickerTurnKey = `${data.room.turnId}:${
+    localDice ? localDice.value : data.room.diceValue
+  }:${localDice ? localDice.rolled : data.room.diceRolled}`;
+  const activePicker =
+    tokenPicker && tokenPicker.turnKey === pickerTurnKey
+      ? tokenPicker.indexes
+      : null;
 
   const selectable = useMemo(() => {
-    if (!data?.me) return [] as number[];
+    if (!data.me) return [] as number[];
     const rolled = localDice ? localDice.rolled : data.room.diceRolled;
     const diceValue = localDice ? localDice.value : data.room.diceValue;
     if (!rolled || diceValue === null) return [] as number[];
     if (data.me.color !== data.room.currentTurn) return [];
     if (data.room.status !== "playing") return [];
     if (animating || optimisticTokens) return [];
+    const mePlayer = data.players.find((p) => p.isMe);
+    if (mePlayer?.finishRank != null || mePlayer?.eliminated) return [];
     const tokens = optimisticTokens ?? serverTokens;
     return getLegalMoves(tokens, data.me.color, diceValue);
   }, [data, animating, localDice, optimisticTokens, serverTokens]);
 
+  const finishRanks = useMemo(() => {
+    const ranks: Partial<Record<Color, number>> = {};
+    for (const p of data.players) {
+      if (p.finishRank != null && !p.eliminated) {
+        ranks[p.color as Color] = p.finishRank;
+      }
+    }
+    return ranks;
+  }, [data.players]);
+
   const moveLogRef = useRef<HTMLUListElement>(null);
-  const eventCount = data?.room.events?.length ?? 0;
+  const eventCount = data.room.events?.length ?? 0;
   useEffect(() => {
     const el = moveLogRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
   }, [eventCount]);
-
-  if (!data) return <StatusText>Loading game…</StatusText>;
 
   const { room, players, me } = data;
   const diceValue = localDice ? localDice.value : room.diceValue;
@@ -223,7 +252,8 @@ export function GameScreen({ roomId, clientId }: Props) {
     !!me &&
     me.color === room.currentTurn &&
     room.status === "playing" &&
-    !players.find((p) => p.color === me.color)?.eliminated;
+    !players.find((p) => p.color === me.color)?.eliminated &&
+    players.find((p) => p.color === me.color)?.finishRank == null;
   const canRoll =
     myTurn && !diceRolled && !rolling && !animating && !optimisticTokens;
   const turnLabel = COLOR_LABEL[room.currentTurn as Color];
@@ -244,10 +274,42 @@ export function GameScreen({ roomId, clientId }: Props) {
     !!players.find((p) => p.isMe && !p.connected) &&
     !offline;
 
+  async function applyOptimisticMove(tokenIndex: number, dice: number) {
+    if (!me) return;
+    const base = optimisticTokens ?? serverTokens;
+    const mover = base.find(
+      (t) => t.color === me.color && t.index === tokenIndex,
+    );
+    const dest = mover ? tryMoveSteps(mover.steps, dice) : null;
+    if (mover && dest !== null) {
+      const captured = findCaptureTarget(base, me.color, dest);
+      const next = base.map((t) => {
+        if (t.color === me.color && t.index === tokenIndex) {
+          return { ...t, steps: dest };
+        }
+        if (
+          captured &&
+          t.color === captured.color &&
+          t.index === captured.index
+        ) {
+          return { ...t, steps: -1 };
+        }
+        return t;
+      });
+      setOptimisticTokens(next);
+      setLocalDice({
+        value: dice,
+        rolled: false,
+        turnId: room.turnId,
+      });
+    }
+  }
+
   async function onRoll() {
     if (!canRoll || rollLock.current) return;
     rollLock.current = true;
     setError(null);
+    setTokenPicker(null);
     setRolling(true);
     setReveal(false);
     haptic("roll");
@@ -276,6 +338,24 @@ export function GameScreen({ roomId, clientId }: Props) {
           rolled: false,
           turnId: room.turnId,
         });
+      } else if (result.autoMoved && result.autoMove && me) {
+        // Reveal dice, pause briefly, then animate the sole legal move.
+        setLocalDice({
+          value: result.value,
+          rolled: true,
+          turnId: room.turnId,
+        });
+        setReveal(true);
+        setTimeout(() => setReveal(false), ROLL_REVEAL_MS);
+        await sleep(AUTO_MOVE_DELAY_MS);
+        await applyOptimisticMove(
+          result.legalMoves[0] ?? 0,
+          result.value,
+        );
+        if (result.autoMove.captured) haptic("capture");
+        setRolling(false);
+        rollLock.current = false;
+        return;
       } else {
         setLocalDice({
           value: result.value,
@@ -295,7 +375,7 @@ export function GameScreen({ roomId, clientId }: Props) {
     }
   }
 
-  async function onSelectToken(tokenIndex: number) {
+  async function commitMove(tokenIndex: number) {
     if (
       animating ||
       moveLock.current ||
@@ -308,39 +388,10 @@ export function GameScreen({ roomId, clientId }: Props) {
     }
     moveLock.current = true;
     setError(null);
+    setTokenPicker(null);
     haptic("tap");
 
-    // Start the walk immediately — don't wait for the mutation/subscription.
-    const base = optimisticTokens ?? serverTokens;
-    const mover = base.find(
-      (t) => t.color === me.color && t.index === tokenIndex,
-    );
-    const dest =
-      mover && diceValue !== null
-        ? tryMoveSteps(mover.steps, diceValue)
-        : null;
-    if (mover && dest !== null) {
-      const captured = findCaptureTarget(base, me.color, dest);
-      const next = base.map((t) => {
-        if (t.color === me.color && t.index === tokenIndex) {
-          return { ...t, steps: dest };
-        }
-        if (
-          captured &&
-          t.color === captured.color &&
-          t.index === captured.index
-        ) {
-          return { ...t, steps: -1 };
-        }
-        return t;
-      });
-      setOptimisticTokens(next);
-      setLocalDice({
-        value: diceValue,
-        rolled: false,
-        turnId: room.turnId,
-      });
-    }
+    await applyOptimisticMove(tokenIndex, diceValue);
 
     try {
       const result = await moveToken({
@@ -349,9 +400,7 @@ export function GameScreen({ roomId, clientId }: Props) {
         tokenIndex,
         turnId: room.turnId,
       });
-      if (result.won) {
-        /* win sound via effect */
-      } else if (result.captured) {
+      if (result.captured) {
         haptic("capture");
       }
     } catch (e) {
@@ -365,6 +414,35 @@ export function GameScreen({ roomId, clientId }: Props) {
     } finally {
       moveLock.current = false;
     }
+  }
+
+  async function onSelectToken(tokenIndex: number) {
+    if (
+      animating ||
+      moveLock.current ||
+      !myTurn ||
+      !diceRolled ||
+      diceValue === null ||
+      !me
+    ) {
+      return;
+    }
+
+    const tokens = optimisticTokens ?? serverTokens;
+    const atCell = legalIndexesAtSameCell(
+      tokens,
+      me.color,
+      selectable,
+      tokenIndex,
+    );
+
+    if (atCell.length > 1) {
+      // Multiple legal tokens on this cell — show an explicit picker.
+      setTokenPicker({ turnKey: pickerTurnKey, indexes: atCell });
+      return;
+    }
+
+    await commitMove(tokenIndex);
   }
 
   async function onRematch() {
@@ -402,7 +480,9 @@ export function GameScreen({ roomId, clientId }: Props) {
     : myTurn
       ? animating
         ? "Moving…"
-        : "Choose a token"
+        : activePicker
+          ? "Choose which token"
+          : "Choose a token"
       : turnAway
         ? `${turnLabel} is away`
         : `Waiting for ${turnLabel}`;
@@ -419,6 +499,10 @@ export function GameScreen({ roomId, clientId }: Props) {
     }
     return ra - rb;
   });
+
+  const midGameFinishers = players.filter(
+    (p) => p.finishRank != null && !p.eliminated && room.status === "playing",
+  );
 
   return (
     <div className={styles.game}>
@@ -527,10 +611,7 @@ export function GameScreen({ roomId, clientId }: Props) {
 
       {threeSixesBanner && room.status === "playing" && (
         <p className={styles.ruleBanner} role="status">
-          Three 6s in a row — turn voided
-          {/token returned/i.test(room.lastEvent ?? "")
-            ? "; token sent back to yard"
-            : ""}
+          Three 6s in a row — streak voided; board restored
         </p>
       )}
 
@@ -550,11 +631,15 @@ export function GameScreen({ roomId, clientId }: Props) {
       <ul className={styles.players}>
         {players.map((p) => {
           const isActive =
-            p.color === room.currentTurn && room.status === "playing";
+            p.color === room.currentTurn &&
+            room.status === "playing" &&
+            p.finishRank == null &&
+            !p.eliminated;
+          const finished = p.finishRank != null && !p.eliminated;
           return (
             <li
               key={p._id}
-              className={`${styles.player} ${isActive ? styles.active : ""} ${!p.connected && !p.isBot ? styles.away : ""} ${p.eliminated ? styles.eliminated : ""}`}
+              className={`${styles.player} ${isActive ? styles.active : ""} ${!p.connected && !p.isBot ? styles.away : ""} ${p.eliminated ? styles.eliminated : ""} ${finished ? styles.finished : ""}`}
               style={{ ["--c" as string]: COLOR_HEX[p.color as Color] }}
             >
               <span className={styles.swatch} />
@@ -564,22 +649,26 @@ export function GameScreen({ roomId, clientId }: Props) {
                   {p.isMe ? " (you)" : ""}
                   {p.eliminated
                     ? " · out"
-                    : p.isBot
-                      ? isActive
-                        ? " · turn"
-                        : ""
-                      : !p.connected
-                        ? " · away"
-                        : isActive
+                    : finished
+                      ? ` · #${p.finishRank}`
+                      : p.isBot
+                        ? isActive
                           ? " · turn"
-                          : ""}
+                          : ""
+                        : !p.connected
+                          ? " · away"
+                          : isActive
+                            ? " · turn"
+                            : ""}
                 </span>
-                <span className={styles.lives} aria-label={`${p.lives} lives`}>
-                  {"♥".repeat(Math.max(0, p.lives))}
-                  <span className={styles.livesEmpty}>
-                    {"♡".repeat(Math.max(0, 3 - p.lives))}
+                {!finished && !p.eliminated && (
+                  <span className={styles.lives} aria-label={`${p.lives} lives`}>
+                    {"♥".repeat(Math.max(0, p.lives))}
+                    <span className={styles.livesEmpty}>
+                      {"♡".repeat(Math.max(0, 3 - p.lives))}
+                    </span>
                   </span>
-                </span>
+                )}
               </span>
             </li>
           );
@@ -606,20 +695,49 @@ export function GameScreen({ roomId, clientId }: Props) {
         </div>
       )}
 
-      <Board
-        tokens={displayTokens}
-        selectable={
-          myTurn && diceRolled && !animating && !optimisticTokens
-            ? selectable
-            : []
-        }
-        myColor={me?.color}
-        activeColor={
-          room.status === "playing" ? (room.currentTurn as Color) : null
-        }
-        fx={fx}
-        onSelectToken={onSelectToken}
-      />
+      <div className={styles.boardSlot}>
+        <Board
+          tokens={displayTokens}
+          selectable={
+            myTurn && diceRolled && !animating && !optimisticTokens
+              ? selectable
+              : []
+          }
+          myColor={me?.color}
+          activeColor={
+            room.status === "playing" ? (room.currentTurn as Color) : null
+          }
+          finishRanks={finishRanks}
+          fx={fx}
+          onSelectToken={onSelectToken}
+        />
+      </div>
+
+      {activePicker && myTurn && diceRolled && (
+        <div className={styles.picker} role="dialog" aria-label="Choose token">
+          <p className={styles.pickerTitle}>Which token?</p>
+          <div className={styles.pickerRow}>
+            {activePicker.map((index) => (
+              <button
+                key={index}
+                type="button"
+                className={styles.pickerBtn}
+                style={{ ["--c" as string]: COLOR_HEX[me!.color as Color] }}
+                onClick={() => void commitMove(index)}
+              >
+                Token {index + 1}
+              </button>
+            ))}
+            <button
+              type="button"
+              className={styles.pickerCancel}
+              onClick={() => setTokenPicker(null)}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className={styles.controls}>
         {room.status === "finished" && (
@@ -660,8 +778,25 @@ export function GameScreen({ roomId, clientId }: Props) {
           </div>
         )}
 
-        {myTurn && diceRolled && selectable.length > 0 && !animating && (
-          <p className={styles.prompt}>Tap a glowing token to move</p>
+        {midGameFinishers.length > 0 && room.status === "playing" && (
+          <p className={styles.standing} role="status">
+            {midGameFinishers
+              .sort((a, b) => (a.finishRank ?? 0) - (b.finishRank ?? 0))
+              .map((p) => `${p.name} #${p.finishRank}`)
+              .join(" · ")}
+            {" — match continues"}
+          </p>
+        )}
+
+        {myTurn &&
+          diceRolled &&
+          selectable.length > 0 &&
+          !animating &&
+          !activePicker && (
+            <p className={styles.prompt}>Tap a glowing token to move</p>
+          )}
+        {myTurn && activePicker && (
+          <p className={styles.prompt}>Overlapping tokens — pick one below</p>
         )}
         {myTurn && !diceRolled && room.status === "playing" && !animating && (
           <p className={styles.prompt}>Your turn — roll the dice</p>

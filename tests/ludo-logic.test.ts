@@ -10,11 +10,14 @@ import {
   getLegalMoves,
   hasWon,
   isBarrierAbsolute,
+  legalIndexesAtSameCell,
   nextColorAmong,
   pickNextColor,
-  pickThreeSixesPenaltyToken,
   rollFairDice,
+  snapshotTokens,
   stackFanOffset,
+  startsSixStreak,
+  tokensShareCell,
   tryMoveSteps,
   absoluteTrackPosition,
   YARD_SIX_WEIGHT,
@@ -133,12 +136,34 @@ describe("win and roll policy", () => {
     expect(gainsExtraTurn(3, false, true)).toBe(true);
   });
 
-  it("picks a token to return on three sixes", () => {
-    const tokens = createInitialTokens(["red"]);
+  it("captures six-streak snapshots and detects shared cells", () => {
+    expect(startsSixStreak(6, 0)).toBe(true);
+    expect(startsSixStreak(6, 1)).toBe(false);
+    expect(startsSixStreak(5, 0)).toBe(false);
+
+    const tokens = createInitialTokens(["red", "green"]);
     tokens[0]!.steps = 10;
-    tokens[1]!.steps = 20;
-    expect(pickThreeSixesPenaltyToken(tokens, "red", 0)).toBe(0);
-    expect(pickThreeSixesPenaltyToken(tokens, "red", null)).toBe(1);
+    tokens[1]!.steps = 10;
+    const snap = snapshotTokens(tokens);
+    expect(snap).toHaveLength(8);
+    expect(snap[0]).toEqual({ color: "red", index: 0, steps: 10 });
+
+    expect(
+      tokensShareCell(
+        { color: "red", index: 0, steps: 10 },
+        { color: "red", index: 1, steps: 10 },
+      ),
+    ).toBe(true);
+    expect(
+      tokensShareCell(
+        { color: "red", index: 0, steps: 10 },
+        { color: "green", index: 0, steps: 49 },
+      ),
+    ).toBe(true); // red@10 abs=10; green start 13 + 49 = 62 % 52 = 10
+    expect(
+      legalIndexesAtSameCell(tokens, "red", [0, 1], 0).sort(),
+    ).toEqual([0, 1]);
+    expect(legalIndexesAtSameCell(tokens, "red", [0], 0)).toEqual([0]);
   });
 
   it("puts leavers/eliminated after the winner in rankings", () => {

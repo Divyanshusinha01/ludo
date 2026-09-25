@@ -23,6 +23,8 @@ type Props = {
   myColor?: Color | null;
   /** Colour whose tokens should subtly glow (current turn). */
   activeColor?: Color | null;
+  /** Finish ranks keyed by colour (1–4) for completed players. */
+  finishRanks?: Partial<Record<Color, number>>;
   fx?: {
     captureKey?: string;
     homeKey?: string;
@@ -36,6 +38,14 @@ const YARD_RECTS: Record<Color, { x: number; y: number }> = {
   green: { x: 9, y: 0 },
   yellow: { x: 9, y: 9 },
   blue: { x: 0, y: 9 },
+};
+
+/** Rank badge anchors inside each house's white inner square. */
+const RANK_BADGE: Record<Color, { x: number; y: number }> = {
+  red: { x: 3 * CELL, y: 3 * CELL },
+  green: { x: 12 * CELL, y: 3 * CELL },
+  yellow: { x: 12 * CELL, y: 12 * CELL },
+  blue: { x: 3 * CELL, y: 12 * CELL },
 };
 
 function Star({ x, y }: { x: number; y: number }) {
@@ -80,12 +90,29 @@ export function Board({
   selectable = [],
   myColor,
   activeColor,
+  finishRanks = {},
   fx,
   onSelectToken,
 }: Props) {
   const size = 15 * CELL;
   const positions = stackedPositions(tokens);
   const interactive = selectable.length > 0 && !!onSelectToken;
+
+  // Stack sizes for visual badges on overlapping tokens.
+  const stackSizes = new Map<string, number>();
+  {
+    const groups = new Map<string, number>();
+    for (const t of tokens) {
+      const key = tokenStackKey(t.color, t.index, t.steps);
+      groups.set(key, (groups.get(key) ?? 0) + 1);
+    }
+    for (const t of tokens) {
+      stackSizes.set(
+        `${t.color}-${t.index}`,
+        groups.get(tokenStackKey(t.color, t.index, t.steps)) ?? 1,
+      );
+    }
+  }
 
   return (
     <div className={styles.wrap}>
@@ -99,6 +126,8 @@ export function Board({
 
         {(Object.keys(YARD_RECTS) as Color[]).map((color) => {
           const { x, y } = YARD_RECTS[color];
+          const rank = finishRanks[color];
+          const badge = RANK_BADGE[color];
           return (
             <g key={color}>
               <rect
@@ -116,7 +145,33 @@ export function Board({
                 height={6 * CELL - 120}
                 fill="#fff"
                 rx={20}
+                opacity={rank ? 0.92 : 1}
               />
+              {rank != null && (
+                <g
+                  className={styles.rankBadge}
+                  aria-label={`${color} finished rank ${rank}`}
+                >
+                  <text
+                    x={badge.x}
+                    y={badge.y - 18}
+                    textAnchor="middle"
+                    className={styles.rankHash}
+                    fill={COLOR_HEX[color]}
+                  >
+                    #{rank}
+                  </text>
+                  <text
+                    x={badge.x}
+                    y={badge.y + 22}
+                    textAnchor="middle"
+                    className={styles.rankLabel}
+                    fill="#1e1810"
+                  >
+                    FINISHED
+                  </text>
+                </g>
+              )}
             </g>
           );
         })}
@@ -199,9 +254,10 @@ export function Board({
             myColor === t.color && selectable.includes(t.index);
           const isActiveTurn = activeColor === t.color;
           const finished = t.steps === 56;
+          const stacked = (stackSizes.get(key) ?? 1) > 1;
           // Smaller disc when home so all four fit inside the centre triangle.
-          const bodyR = finished ? 16 : 24;
-          const shadowR = finished ? 17 : 26;
+          const bodyR = finished ? 16 : stacked ? 22 : 24;
+          const shadowR = finished ? 17 : stacked ? 24 : 26;
           const strokeW = finished
             ? t.color === "yellow"
               ? 3
@@ -230,8 +286,10 @@ export function Board({
                   ? `Move ${t.color} token ${t.index + 1}`
                   : undefined
               }
-              onClick={() => {
-                if (canSelect && onSelectToken) onSelectToken(t.index);
+              onClick={(e) => {
+                if (!canSelect || !onSelectToken) return;
+                e.stopPropagation();
+                onSelectToken(t.index);
               }}
               onKeyDown={(e) => {
                 if (!canSelect || !onSelectToken) return;
@@ -247,7 +305,7 @@ export function Board({
               >
                 {canSelect && (
                   <circle
-                    r={36}
+                    r={38}
                     fill="none"
                     stroke="#111"
                     strokeWidth={3}
@@ -264,7 +322,8 @@ export function Board({
                     opacity={0.7}
                   />
                 )}
-                {canSelect && <circle r={40} fill="transparent" />}
+                {/* Generous invisible hit target so stacked tokens stay tappable */}
+                {canSelect && <circle r={44} fill="transparent" />}
                 <circle
                   r={shadowR}
                   fill="#111"
@@ -284,6 +343,20 @@ export function Board({
                   cx={finished ? -4 : -6}
                   cy={finished ? -4 : -6}
                 />
+                {/* Token number helps distinguish overlaps of the same colour */}
+                {!finished && (
+                  <text
+                    textAnchor="middle"
+                    dominantBaseline="central"
+                    className={styles.tokenNum}
+                    fill="#fff"
+                    stroke="#1e1810"
+                    strokeWidth={2}
+                    paintOrder="stroke"
+                  >
+                    {t.index + 1}
+                  </text>
+                )}
               </g>
             </g>
           );

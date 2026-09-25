@@ -20,8 +20,10 @@ import {
   hasWon,
   MAX_TIMEOUT_LIVES,
   nextColorAmong,
-  pickThreeSixesPenaltyToken,
   rollFairDice,
+  snapshotTokens,
+  startsSixStreak,
+  TokenSnapshot,
   TokenState,
   tryMoveSteps,
   TURN_TIMEOUT_MS,
@@ -58,11 +60,37 @@ async function seatedPlayers(ctx: MutationCtx | QueryCtx, roomId: Id<"rooms">) {
     .collect();
 }
 
-/** Colours that still take turns. */
+/**
+ * Colours that still take turns: seated, not eliminated, and not yet ranked
+ * (finished players keep their seat/tokens visible but leave the rotation).
+ */
 function playableColors(players: Doc<"players">[]): Color[] {
   return (["red", "green", "yellow", "blue"] as Color[]).filter((c) =>
-    players.some((p) => p.color === c && !p.eliminated),
+    players.some(
+      (p) =>
+        p.color === c && !p.eliminated && p.finishRank == null,
+    ),
   );
+}
+
+/** Restore every token to a prior board snapshot (three-six rollback). */
+async function restoreTokenSnapshot(
+  ctx: MutationCtx,
+  roomId: Id<"rooms">,
+  snapshot: TokenSnapshot[],
+) {
+  const docs = await ctx.db
+    .query("tokens")
+    .withIndex("by_room", (q) => q.eq("roomId", roomId))
+    .collect();
+  for (const snap of snapshot) {
+    const doc = docs.find(
+      (t) => t.color === snap.color && t.index === snap.index,
+    );
+    if (doc && doc.steps !== snap.steps) {
+      await ctx.db.patch(doc._id, { steps: snap.steps });
+    }
+  }
 }
 
 async function scheduleTurnTimeout(
@@ -100,7 +128,9 @@ async function maybeScheduleBotTurn(
   if ((room.turnId ?? 0) !== turnId) return;
   const players = await seatedPlayers(ctx, roomId);
   const current = players.find((p) => p.color === room.currentTurn);
-  if (!current || !current.isBot || current.eliminated) return;
+  if (!current || !current.isBot || current.eliminated || current.finishRank != null) {
+    return;
+  }
   await scheduleBotTurn(ctx, roomId, turnId, delayMs);
 }
 
@@ -129,7 +159,8 @@ async function beginTurn(
 
   // `patch` may include diceValue (last face for UI). Drop lastEvent —
   // we replace it with the appended log fields below.
-  const { lastEvent: _ignored, ...restPatch } = patch;
+  const restPatch = { ...patch };
+  delete restPatch.lastEvent;
   // Turn-control fields below always win over patch.
   await ctx.db.patch(room._id, {
     diceValue: null,
@@ -138,6 +169,7 @@ async function beginTurn(
     diceRolled: false,
     consecutiveSixes: 0,
     lastMovedTokenIndex: null,
+    sixStreakSnapshot: null,
     turnId,
     turnStartedAt: now,
     lastActivityAt: now,
@@ -165,18 +197,26 @@ async function returnTokensToYard(
 }
 
 /**
- * When only one playable colour remains, they win.
- * Rankings: existing finishers first, then survivor, then eliminated/forfeits last.
+ * When only one colour is still playing and every other seat was eliminated
+ * (not finished by completing home), they win. Players who already finished
+ * by bringing all tokens home do not trigger this — the last seat must play out.
  */
 async function maybeFinishSoleSurvivor(
   ctx: MutationCtx,
   room: Doc<"rooms">,
   players: Doc<"players">[],
 ): Promise<boolean> {
-  const alive = players.filter((p) => !p.eliminated);
-  if (alive.length !== 1) return false;
+  const stillPlaying = players.filter(
+    (p) => !p.eliminated && p.finishRank == null,
+  );
+  if (stillPlaying.length !== 1) return false;
 
-  const sole = alive[0]!;
+  const others = players.filter((p) => p._id !== stillPlaying[0]!._id);
+  if (others.length === 0) return false;
+  // Only auto-win when every other seat is eliminated (forfeit / lives).
+  if (!others.every((p) => p.eliminated)) return false;
+
+  const sole = stillPlaying[0]!;
   const now = Date.now();
   const rankings = buildFinalRankings(
     room.rankings ?? [],
@@ -195,6 +235,7 @@ async function maybeFinishSoleSurvivor(
     winner: sole.color,
     rankings,
     diceRolled: false,
+    sixStreakSnapshot: null,
     finishedAt: now,
     lastActivityAt: now,
     ...withEvent(room, `${sole.name} wins — others eliminated`, now),
@@ -207,6 +248,84 @@ async function maybeFinishSoleSurvivor(
   return true;
 }
 
+/**
+ * End the match when every seated player has a final rank (all finished or
+ * eliminated). Winner is the first entry in rankings (rank #1).
+ */
+async function maybeFinishAllRanked(
+  ctx: MutationCtx,
+  room: Doc<"rooms">,
+  players: Doc<"players">[],
+  now: number,
+): Promise<boolean> {
+  if (players.length === 0) return false;
+  if (!players.every((p) => p.finishRank != null || p.eliminated)) {
+    return false;
+  }
+
+  const rankings =
+    (room.rankings ?? []).length > 0
+      ? [...(room.rankings ?? [])]
+      : buildFinalRankings(
+          [],
+          players[0]!.color as Color,
+          players.map((p) => ({
+            color: p.color as Color,
+            finishRank: p.finishRank,
+          })),
+        );
+
+  // Ensure every seated colour appears exactly once.
+  for (const p of players) {
+    if (!rankings.includes(p.color as Color)) {
+      rankings.push(p.color as Color);
+    }
+  }
+
+  const winner = rankings[0] ?? null;
+  await ctx.db.patch(room._id, {
+    status: "finished",
+    winner,
+    rankings,
+    diceRolled: false,
+    sixStreakSnapshot: null,
+    finishedAt: now,
+    lastActivityAt: now,
+    ...withEvent(room, "Match complete — final rankings set", now),
+  });
+  logEvent("game_finished", {
+    roomCode: room.code,
+    winner,
+    reason: "all_ranked",
+  });
+  return true;
+}
+
+/**
+ * Record a home-finish rank without ending the match early. Returns the new
+ * rankings array. No-ops (returns existing) if already ranked.
+ */
+async function assignFinishRank(
+  ctx: MutationCtx,
+  room: Doc<"rooms">,
+  player: Doc<"players">,
+): Promise<Color[]> {
+  if (player.finishRank != null) {
+    return [...(room.rankings ?? [])];
+  }
+  const rankings = [...(room.rankings ?? [])];
+  if (rankings.includes(player.color as Color)) {
+    // Repair missing finishRank if rankings already list this colour.
+    await ctx.db.patch(player._id, {
+      finishRank: rankings.indexOf(player.color as Color) + 1,
+    });
+    return rankings;
+  }
+  rankings.push(player.color as Color);
+  await ctx.db.patch(player._id, { finishRank: rankings.length });
+  return rankings;
+}
+
 /** Apply timeout life loss / elimination / turn advance. Shared by cron + eager expiry. */
 async function applyTurnTimeout(
   ctx: MutationCtx,
@@ -214,7 +333,7 @@ async function applyTurnTimeout(
 ): Promise<void> {
   const players = await seatedPlayers(ctx, room._id);
   const current = players.find((p) => p.color === room.currentTurn);
-  if (!current || current.eliminated) return;
+  if (!current || current.eliminated || current.finishRank != null) return;
 
   const lives = (current.lives ?? MAX_TIMEOUT_LIVES) - 1;
 
@@ -291,10 +410,26 @@ async function requireActivePlayer(
     .unique();
 
   if (!player) fail(GameError.notInRoom);
-  if (player.eliminated) fail(GameError.eliminated);
+  if (player.eliminated || player.finishRank != null) {
+    fail(GameError.eliminated);
+  }
   if (player.color !== room.currentTurn) fail(GameError.notYourTurn);
   return player;
 }
+
+type MoveResult = {
+  won: boolean;
+  matchOver?: boolean;
+  rank?: number;
+  captured: boolean;
+  reachedHome: boolean;
+  leftYard: boolean;
+  fromSteps: number;
+  toSteps: number;
+  extraTurn?: boolean;
+  capturedColor?: string | null;
+  capturedIndex?: number | null;
+};
 
 type RollResult = {
   value: number;
@@ -302,7 +437,9 @@ type RollResult = {
   legalMoves: number[];
   threeSixes?: boolean;
   rollAgain?: boolean;
-  returnedToken?: number | null;
+  /** Server auto-moved the sole legal token after this roll. */
+  autoMoved?: boolean;
+  autoMove?: MoveResult;
 };
 
 /** Shared roll logic for humans and bots. Caller must validate turn ownership. */
@@ -326,6 +463,7 @@ async function executeRoll(
     room.consecutiveSixes,
     legalMoves.length,
   );
+  const captureSnapshot = startsSixStreak(value, room.consecutiveSixes);
 
   logEvent("dice_rolled", {
     roomCode: room.code,
@@ -337,27 +475,15 @@ async function executeRoll(
   });
 
   if (decision.kind === "three_sixes") {
-    const penaltyIndex = pickThreeSixesPenaltyToken(
-      tokens,
-      player.color,
-      room.lastMovedTokenIndex ?? null,
-    );
-    if (penaltyIndex !== null) {
-      const tokenList = await ctx.db
-        .query("tokens")
-        .withIndex("by_room_color", (q) =>
-          q.eq("roomId", roomId).eq("color", player.color),
-        )
-        .collect();
-      const doc = tokenList.find((t) => t.index === penaltyIndex);
-      if (doc) await ctx.db.patch(doc._id, { steps: -1 });
+    const snapshot = room.sixStreakSnapshot ?? null;
+    if (snapshot && snapshot.length > 0) {
+      await restoreTokenSnapshot(ctx, roomId, snapshot);
     }
 
     const next = nextColorAmong(room.currentTurn, seated);
-    const event =
-      penaltyIndex !== null
-        ? `${player.name} rolled three 6s — token returned home, turn skipped`
-        : `${player.name} rolled three 6s — turn skipped`;
+    const event = snapshot?.length
+      ? `${player.name} rolled three 6s — moves undone, turn skipped`
+      : `${player.name} rolled three 6s — turn skipped`;
 
     await beginTurn(ctx, room, next, {
       diceValue: value,
@@ -368,7 +494,6 @@ async function executeRoll(
       skipped: true,
       threeSixes: true,
       legalMoves: [] as number[],
-      returnedToken: penaltyIndex,
     };
   }
 
@@ -377,6 +502,9 @@ async function executeRoll(
       diceValue: value,
       diceRolled: false,
       consecutiveSixes: decision.consecutiveSixes,
+      ...(captureSnapshot
+        ? { sixStreakSnapshot: snapshotTokens(tokens) }
+        : {}),
       lastActivityAt: now,
       ...withEvent(
         room,
@@ -400,24 +528,36 @@ async function executeRoll(
     diceValue: value,
     diceRolled: true,
     consecutiveSixes: decision.consecutiveSixes,
+    ...(captureSnapshot
+      ? { sixStreakSnapshot: snapshotTokens(tokens) }
+      : {}),
     lastActivityAt: now,
     ...withEvent(room, `${player.name} rolled ${value}`, now),
   });
 
+  // Exactly one legal token → server-authoritative auto-move.
+  if (legalMoves.length === 1) {
+    const fresh = (await ctx.db.get(roomId))!;
+    const autoMove = await executeMove(
+      ctx,
+      roomId,
+      fresh,
+      player,
+      legalMoves[0]!,
+      now,
+      clientIdForLog,
+    );
+    return {
+      value,
+      skipped: false,
+      legalMoves,
+      autoMoved: true,
+      autoMove,
+    };
+  }
+
   return { value, skipped: false, legalMoves };
 }
-
-type MoveResult = {
-  won: boolean;
-  captured: boolean;
-  reachedHome: boolean;
-  leftYard: boolean;
-  fromSteps: number;
-  toSteps: number;
-  extraTurn?: boolean;
-  capturedColor?: string | null;
-  capturedIndex?: number | null;
-};
 
 /** Shared move logic for humans and bots. Caller must validate turn ownership. */
 async function executeMove(
@@ -523,30 +663,67 @@ async function executeMove(
   });
 
   if (hasWon(updatedTokens, player.color)) {
-    const rankings = [...(room.rankings ?? []), player.color as Color];
-    await ctx.db.patch(player._id, { finishRank: rankings.length });
-    const moveNote = captured
-      ? `${player.name} captured and finished — wins!`
-      : `${player.name} wins!`;
+    const rankings = await assignFinishRank(ctx, room, player);
+    const rank = rankings.indexOf(player.color as Color) + 1;
+    const isFirst = rank === 1;
+    const placeNote = captured
+      ? `${player.name} captured and finished — #${rank}!`
+      : `${player.name} finished — #${rank}!`;
+
     await ctx.db.patch(roomId, {
-      status: "finished",
-      winner: player.color,
       rankings,
+      winner: isFirst ? player.color : (room.winner ?? player.color),
       diceRolled: false,
       diceValue: dice,
       consecutiveSixes: 0,
       lastMovedTokenIndex: null,
-      finishedAt: now,
+      sixStreakSnapshot: null,
       lastActivityAt: now,
-      ...withEvent(room, moveNote, now),
+      ...withEvent(room, placeNote, now),
     });
-    logEvent("game_finished", {
-      roomCode: room.code,
-      winner: player.color,
-      reason: "all_home",
+
+    const refreshedRoom = (await ctx.db.get(roomId))!;
+    const refreshedPlayers = await seatedPlayers(ctx, roomId);
+
+    if (await maybeFinishAllRanked(ctx, refreshedRoom, refreshedPlayers, now)) {
+      return {
+        won: true,
+        matchOver: true,
+        rank,
+        captured: !!captured,
+        reachedHome,
+        leftYard,
+        fromSteps,
+        toSteps: dest,
+      };
+    }
+
+    const stillPlaying = playableColors(refreshedPlayers);
+    if (stillPlaying.length === 0) {
+      await maybeFinishAllRanked(ctx, refreshedRoom, refreshedPlayers, now);
+      return {
+        won: true,
+        matchOver: true,
+        rank,
+        captured: !!captured,
+        reachedHome,
+        leftYard,
+        fromSteps,
+        toSteps: dest,
+      };
+    }
+
+    // Finished players leave the rotation; remaining seats continue.
+    const next = nextColorAmong(room.currentTurn, stillPlaying);
+    await beginTurn(ctx, refreshedRoom, next, {
+      diceValue: dice,
+      lastEvent: `${player.name} is done (#${rank}) — game continues`,
     });
+
     return {
       won: true,
+      matchOver: false,
+      rank,
       captured: !!captured,
       reachedHome,
       leftYard,
@@ -571,11 +748,15 @@ async function executeMove(
         ? `${player.name} captured ${capturedLabel} — roll again`
         : `${player.name} rolled 6 — roll again`;
 
+    const keepSixStreak = dice === 6;
     await ctx.db.patch(roomId, {
       diceRolled: false,
       diceValue: dice,
-      consecutiveSixes: dice === 6 ? room.consecutiveSixes : 0,
-      lastMovedTokenIndex: dice === 6 ? tokenIndex : null,
+      consecutiveSixes: keepSixStreak ? room.consecutiveSixes : 0,
+      lastMovedTokenIndex: null,
+      sixStreakSnapshot: keepSixStreak
+        ? (room.sixStreakSnapshot ?? null)
+        : null,
       turnId,
       turnStartedAt: now,
       lastActivityAt: now,
@@ -607,13 +788,28 @@ async function executeMove(
   };
 }
 
+const moveResultValidator = v.object({
+  won: v.boolean(),
+  matchOver: v.optional(v.boolean()),
+  rank: v.optional(v.number()),
+  captured: v.boolean(),
+  reachedHome: v.boolean(),
+  leftYard: v.boolean(),
+  fromSteps: v.number(),
+  toSteps: v.number(),
+  extraTurn: v.optional(v.boolean()),
+  capturedColor: v.optional(v.union(v.string(), v.null())),
+  capturedIndex: v.optional(v.union(v.number(), v.null())),
+});
+
 const rollResultValidator = v.object({
   value: v.number(),
   skipped: v.boolean(),
   legalMoves: v.array(v.number()),
   threeSixes: v.optional(v.boolean()),
   rollAgain: v.optional(v.boolean()),
-  returnedToken: v.optional(v.union(v.number(), v.null())),
+  autoMoved: v.optional(v.boolean()),
+  autoMove: v.optional(moveResultValidator),
 });
 
 export const rollDice = mutation({
@@ -649,18 +845,6 @@ export const rollDice = mutation({
 
     return await executeRoll(ctx, args.roomId, fresh, player, now, clientId);
   },
-});
-
-const moveResultValidator = v.object({
-  won: v.boolean(),
-  captured: v.boolean(),
-  reachedHome: v.boolean(),
-  leftYard: v.boolean(),
-  fromSteps: v.number(),
-  toSteps: v.number(),
-  extraTurn: v.optional(v.boolean()),
-  capturedColor: v.optional(v.union(v.string(), v.null())),
-  capturedIndex: v.optional(v.union(v.number(), v.null())),
 });
 
 export const moveToken = mutation({
@@ -740,7 +924,14 @@ export const playBotTurn = internalMutation({
 
     const players = await seatedPlayers(ctx, args.roomId);
     const player = players.find((p) => p.color === room.currentTurn);
-    if (!player || !player.isBot || player.eliminated) return null;
+    if (
+      !player ||
+      !player.isBot ||
+      player.eliminated ||
+      player.finishRank != null
+    ) {
+      return null;
+    }
 
     const now = Date.now();
     await ctx.db.patch(player._id, {
@@ -759,7 +950,8 @@ export const playBotTurn = internalMutation({
         player.clientId,
       );
       // Need another roll (6 with no moves) or a move after this roll.
-      if (!result.skipped) {
+      // Auto-moved rolls already advanced turn / scheduled the next bot action.
+      if (!result.skipped && !result.autoMoved) {
         const fresh = await ctx.db.get(args.roomId);
         if (fresh && fresh.status === "playing") {
           await maybeScheduleBotTurn(
@@ -831,7 +1023,12 @@ export const getLegalTokenIndexes = query({
       )
       .unique();
 
-    if (!player || player.eliminated || player.color !== room.currentTurn) {
+    if (
+      !player ||
+      player.eliminated ||
+      player.finishRank != null ||
+      player.color !== room.currentTurn
+    ) {
       return [];
     }
 

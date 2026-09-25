@@ -1,12 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import { useRouter } from "next/navigation";
+import type { FunctionReturnType } from "convex/server";
 import { api } from "../../convex/_generated/api";
 import { Id } from "../../convex/_generated/dataModel";
 import { useRoomPresence } from "@/hooks/useRoomPresence";
-import { Button, ErrorText, StatusText } from "./ui";
+import { Button, ErrorText } from "./ui";
 import {
   COLOR_HEX,
   COLOR_LABEL,
@@ -15,15 +16,17 @@ import {
 } from "@/lib/player";
 import styles from "./Lobby.module.css";
 
+export type RoomBundle = NonNullable<FunctionReturnType<typeof api.rooms.getRoom>>;
+
 type Props = {
+  data: RoomBundle;
   roomId: Id<"rooms">;
   clientId: string;
   code: string;
 };
 
-export function Lobby({ roomId, clientId, code }: Props) {
+export function Lobby({ data, roomId, clientId, code }: Props) {
   const router = useRouter();
-  const data = useQuery(api.rooms.getRoom, { roomId, clientId });
   const startGame = useMutation(api.rooms.startGame);
   const leaveRoom = useMutation(api.rooms.leaveRoom);
   const kickPlayer = useMutation(api.rooms.kickPlayer);
@@ -33,10 +36,6 @@ export function Lobby({ roomId, clientId, code }: Props) {
   const [kickBusy, setKickBusy] = useState<Color | null>(null);
 
   useRoomPresence(roomId, clientId);
-
-  if (!data) {
-    return <StatusText>Loading lobby…</StatusText>;
-  }
 
   const { room, players, me } = data;
   const isHost = !!me?.isHost;

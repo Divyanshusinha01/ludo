@@ -28,10 +28,27 @@ export default defineSchema({
     diceRolled: v.boolean(),
     consecutiveSixes: v.number(),
     /**
-     * Token index moved during the current consecutive-six streak
-     * (used for three-sixes yard return). Cleared when streak ends.
+     * @deprecated Three-six rollback now uses sixStreakSnapshot.
+     * Kept optional so older rooms read cleanly until rematch/reset.
      */
     lastMovedTokenIndex: v.optional(v.union(v.number(), v.null())),
+    /**
+     * Full board token positions captured before the first six of the
+     * current consecutive-six streak. Restored (not yard-reset) on the
+     * third six. Cleared when the streak ends or the turn advances.
+     */
+    sixStreakSnapshot: v.optional(
+      v.union(
+        v.null(),
+        v.array(
+          v.object({
+            color: colorValidator,
+            index: v.number(),
+            steps: v.number(),
+          }),
+        ),
+      ),
+    ),
     /** Monotonic id so scheduled turn timeouts ignore stale jobs. */
     turnId: v.optional(v.number()),
     /** When the current turn began (ms). Client countdown is derived. */

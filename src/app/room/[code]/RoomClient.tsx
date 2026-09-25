@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
+import type { Id } from "../../../../convex/_generated/dataModel";
 import { Lobby } from "@/components/Lobby";
 import { GameScreen } from "@/components/GameScreen";
 import { Button, ErrorText, StatusText } from "@/components/ui";
@@ -16,7 +17,18 @@ import {
 } from "@/lib/player";
 import styles from "./room.module.css";
 
-export function RoomClient({ code }: { code: string }) {
+function isRoomId(value: string | undefined): value is Id<"rooms"> {
+  // Convex document ids are non-empty opaque strings.
+  return typeof value === "string" && value.length >= 16 && value.length <= 64;
+}
+
+export function RoomClient({
+  code,
+  roomIdHint,
+}: {
+  code: string;
+  roomIdHint?: string;
+}) {
   const clientId = useSessionId();
   const [joinError, setJoinError] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -24,13 +36,20 @@ export function RoomClient({ code }: { code: string }) {
   const [offline, setOffline] = useState(false);
   const pendingJoinTried = useRef(false);
   const roomCode = normalizeCode(code);
+  const knownRoomId = isRoomId(roomIdHint) ? roomIdHint : null;
 
-  const data = useQuery(
+  // Prefer room id from create/vs-computer navigate — skips code lookup.
+  const dataById = useQuery(
+    api.rooms.getRoom,
+    clientId && knownRoomId ? { roomId: knownRoomId, clientId } : "skip",
+  );
+  const dataByCode = useQuery(
     api.rooms.getRoomByCode,
-    clientId && roomCode.length === 6
+    clientId && !knownRoomId && roomCode.length === 6
       ? { code: roomCode, clientId }
       : "skip",
   );
+  const data = knownRoomId ? dataById : dataByCode;
   const joinRoom = useMutation(api.rooms.joinRoom);
 
   useEffect(() => {
@@ -126,6 +145,17 @@ export function RoomClient({ code }: { code: string }) {
     );
   }
 
+  // Stale/mismatched ?rid= — fall through as not found rather than wrong seat.
+  if (data && data.room.code !== roomCode) {
+    return (
+      <div className={styles.center}>
+        <h1>Room not found</h1>
+        <p>The code may have expired or been typed wrong.</p>
+        <Link href="/">Back home</Link>
+      </div>
+    );
+  }
+
   if (!hasMe && roomStatus !== "lobby") {
     return (
       <div className={styles.center}>
@@ -186,6 +216,7 @@ export function RoomClient({ code }: { code: string }) {
   if (data.room.status === "lobby") {
     return (
       <Lobby
+        data={data}
         roomId={data.room._id}
         clientId={clientId}
         code={data.room.code}
@@ -193,5 +224,7 @@ export function RoomClient({ code }: { code: string }) {
     );
   }
 
-  return <GameScreen roomId={data.room._id} clientId={clientId} />;
+  return (
+    <GameScreen data={data} roomId={data.room._id} clientId={clientId} />
+  );
 }

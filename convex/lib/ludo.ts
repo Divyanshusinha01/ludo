@@ -314,28 +314,79 @@ export function gainsExtraTurn(
   return dice === 6 || captured || reachedHome;
 }
 
+/** Board snapshot used to roll back a voided three-six streak. */
+export type TokenSnapshot = {
+  color: Color;
+  index: number;
+  steps: number;
+};
+
+/** Capture full board positions before the first six of a streak. */
+export function snapshotTokens(tokens: TokenState[]): TokenSnapshot[] {
+  return tokens.map((t) => ({
+    color: t.color,
+    index: t.index,
+    steps: t.steps,
+  }));
+}
+
 /**
- * On three consecutive sixes the turn is voided. If a token was moved
- * during the six-streak, that token returns to the yard; otherwise the
- * player's furthest token still on the board/home stretch is returned.
+ * True when this roll starts a new consecutive-six streak (first 6 after a
+ * non-six or a fresh turn). Snapshot must be taken on the server at this moment.
  */
-export function pickThreeSixesPenaltyToken(
+export function startsSixStreak(
+  value: number,
+  consecutiveSixesBefore: number,
+): boolean {
+  return value === 6 && consecutiveSixesBefore === 0;
+}
+
+/**
+ * Whether two tokens share the same visual board cell (for overlap selection).
+ * Yard tokens occupy unique slots and never share a cell.
+ */
+export function tokensShareCell(a: TokenState, b: TokenState): boolean {
+  if (a.steps < 0 || b.steps < 0) return false;
+  if (a.steps === FINISHED_STEPS && b.steps === FINISHED_STEPS) {
+    return a.color === b.color;
+  }
+  if (
+    a.steps >= HOME_ENTRY_STEPS &&
+    a.steps < FINISHED_STEPS &&
+    b.steps >= HOME_ENTRY_STEPS &&
+    b.steps < FINISHED_STEPS
+  ) {
+    return a.color === b.color && a.steps === b.steps;
+  }
+  if (a.steps >= 0 && a.steps <= MAX_TRACK_STEPS && b.steps >= 0 && b.steps <= MAX_TRACK_STEPS) {
+    const absA = absoluteTrackPosition(a.color, a.steps);
+    const absB = absoluteTrackPosition(b.color, b.steps);
+    return absA !== null && absA === absB;
+  }
+  return false;
+}
+
+/**
+ * Among `legalIndexes` for `color`, return every index that shares a cell with
+ * the token at `clickedIndex` (including itself). Used for overlap pickers.
+ */
+export function legalIndexesAtSameCell(
   tokens: TokenState[],
   color: Color,
-  lastMovedIndex: number | null,
-): number | null {
-  const mine = tokens.filter(
-    (t) => t.color === color && t.steps >= 0 && t.steps < FINISHED_STEPS,
+  legalIndexes: number[],
+  clickedIndex: number,
+): number[] {
+  const clicked = tokens.find(
+    (t) => t.color === color && t.index === clickedIndex,
   );
-  if (mine.length === 0) return null;
+  if (!clicked || !legalIndexes.includes(clickedIndex)) return [];
 
-  if (lastMovedIndex !== null) {
-    const last = mine.find((t) => t.index === lastMovedIndex);
-    if (last) return last.index;
-  }
-
-  mine.sort((a, b) => b.steps - a.steps || a.index - b.index);
-  return mine[0]!.index;
+  return legalIndexes.filter((index) => {
+    const t = tokens.find((x) => x.color === color && x.index === index);
+    if (!t) return false;
+    if (index === clickedIndex) return true;
+    return tokensShareCell(clicked, t);
+  });
 }
 
 /** Fan-out offsets for N tokens sharing one cell (SVG units). */
@@ -344,7 +395,8 @@ export function stackFanOffset(
   stackSize: number,
 ): { x: number; y: number } {
   if (stackSize <= 1) return { x: 0, y: 0 };
-  const radius = stackSize === 2 ? 14 : stackSize === 3 ? 16 : 18;
+  // Wider fan so overlapping tokens stay tappable on mobile.
+  const radius = stackSize === 2 ? 22 : stackSize === 3 ? 26 : 30;
   const angle =
     (Math.PI * 2 * indexInStack) / stackSize - Math.PI / 2;
   return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
