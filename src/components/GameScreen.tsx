@@ -19,7 +19,7 @@ import { haptic } from "@/lib/haptics";
 import { bindAudioUnlock, isMuted, playSound, setMuted } from "@/lib/sounds";
 import { Board } from "./Board";
 import { Dice } from "./Dice";
-import { Button, ErrorText, TroubleshootButton } from "./ui";
+import { Button, ErrorText } from "./ui";
 import {
   COLOR_HEX,
   COLOR_LABEL,
@@ -525,12 +525,16 @@ export function GameScreen({ data, roomId, clientId }: Props) {
           <div className={styles.topRow}>
             <p className={styles.label}>Room {room.code}</p>
             <div className={styles.topActions}>
-              <TroubleshootButton
-                variant="link"
+              <button
+                type="button"
+                className={styles.iconBtn}
                 onClick={() => void onTroubleshoot()}
-                busy={troubleBusy}
-                disabled={isTroubleshootCoolingDown()}
-              />
+                disabled={troubleBusy || isTroubleshootCoolingDown()}
+                aria-busy={troubleBusy || undefined}
+                aria-label="Troubleshoot connection"
+              >
+                {troubleBusy ? "Fixing…" : "Troubleshoot"}
+              </button>
               <button
                 type="button"
                 className={styles.iconBtn}
@@ -542,9 +546,10 @@ export function GameScreen({ data, roomId, clientId }: Props) {
               {room.status === "playing" && (
                 <button
                   type="button"
-                  className={styles.leaveLink}
+                  className={styles.iconBtn}
                   disabled={busy}
                   onClick={onLeave}
+                  aria-label="Leave game"
                 >
                   Leave
                 </button>
