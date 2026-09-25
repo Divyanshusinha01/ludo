@@ -105,6 +105,15 @@ function renderMentionText(
   });
 }
 
+type ChatFlash = {
+  id: string;
+  name: string;
+  text: string;
+  isPrivate: boolean;
+};
+
+const FLASH_MS = 1000;
+
 export function ChatPanel({ roomId, clientId, players }: Props) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
@@ -113,10 +122,12 @@ export function ChatPanel({ roomId, clientId, players }: Props) {
   const [lastReadAt, setLastReadAt] = useState(() => readWatermark(roomId));
   const [mentionIndex, setMentionIndex] = useState(0);
   const [caret, setCaret] = useState(0);
+  const [flash, setFlash] = useState<ChatFlash | null>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const lastNotifiedId = useRef<string | null>(null);
   const primedRef = useRef(false);
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const messages = useQuery(api.chat.listMessages, { roomId, clientId });
   const sendMessage = useMutation(api.chat.sendMessage);
@@ -151,7 +162,32 @@ export function ChatPanel({ roomId, clientId, players }: Props) {
     setLastReadAt(readWatermark(roomId));
     lastNotifiedId.current = null;
     primedRef.current = false;
+    setFlash(null);
+    if (flashTimerRef.current) {
+      clearTimeout(flashTimerRef.current);
+      flashTimerRef.current = null;
+    }
   }, [roomId]);
+
+  useEffect(() => {
+    return () => {
+      if (flashTimerRef.current) {
+        clearTimeout(flashTimerRef.current);
+        flashTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  function showFlash(next: ChatFlash) {
+    if (flashTimerRef.current) {
+      clearTimeout(flashTimerRef.current);
+    }
+    setFlash(next);
+    flashTimerRef.current = setTimeout(() => {
+      setFlash(null);
+      flashTimerRef.current = null;
+    }, FLASH_MS);
+  }
 
   // Mark read when open / while open with new messages.
   useEffect(() => {
@@ -163,7 +199,7 @@ export function ChatPanel({ roomId, clientId, players }: Props) {
     }
   }, [open, messages, lastReadAt, roomId]);
 
-  // Notify sound for new messages while closed.
+  // Notify sound + flash for new messages while closed.
   useEffect(() => {
     if (!messages) return;
 
@@ -207,6 +243,12 @@ export function ChatPanel({ roomId, clientId, players }: Props) {
 
     if (isNew) {
       playSound("chat");
+      showFlash({
+        id: newestOther._id,
+        name: newestOther.name,
+        text: newestOther.text,
+        isPrivate: newestOther.isPrivate,
+      });
     }
     lastNotifiedId.current = newestOther._id;
   }, [messages, open, lastReadAt, roomId]);
@@ -292,6 +334,11 @@ export function ChatPanel({ roomId, clientId, players }: Props) {
   function openChat() {
     setOpen(true);
     setError(null);
+    setFlash(null);
+    if (flashTimerRef.current) {
+      clearTimeout(flashTimerRef.current);
+      flashTimerRef.current = null;
+    }
     if (messages && messages.length > 0) {
       const latest = messages[messages.length - 1]!.createdAt;
       setLastReadAt(latest);
@@ -306,6 +353,22 @@ export function ChatPanel({ roomId, clientId, players }: Props) {
 
   return (
     <div className={styles.root}>
+      {flash && (
+        <button
+          type="button"
+          className={styles.flash}
+          onClick={openChat}
+          aria-label={`New message from ${flash.name}: ${flash.text}`}
+        >
+          <span className={styles.flashName}>
+            {flash.name}
+            {flash.isPrivate ? (
+              <span className={styles.flashPrivate}> private</span>
+            ) : null}
+          </span>
+          <span className={styles.flashText}>{flash.text}</span>
+        </button>
+      )}
       <button
         type="button"
         className={styles.toggle}
