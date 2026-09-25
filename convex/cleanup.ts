@@ -3,6 +3,7 @@ import { Id } from "./_generated/dataModel";
 import { buildFinalRankings, Color } from "./lib/ludo";
 import { withEvent } from "./lib/events";
 import { logEvent } from "./lib/log";
+import { clearChatForRoom } from "./lib/roomAuth";
 
 /** Mark away if no heartbeat within this window. */
 const STALE_MS = 45_000;
@@ -149,6 +150,7 @@ export const tick = internalMutation({
 
 async function deleteRoomCascade(ctx: MutationCtx, roomId: Id<"rooms">) {
   const room = await ctx.db.get(roomId);
+  await clearChatForRoom(ctx, roomId);
   const players = await ctx.db
     .query("players")
     .withIndex("by_room", (q) => q.eq("roomId", roomId))

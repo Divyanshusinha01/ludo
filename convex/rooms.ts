@@ -28,6 +28,7 @@ import {
 } from "./lib/session";
 import { colorValidator } from "./schema";
 import { freshEvents, withEvent, withEvents } from "./lib/events";
+import { clearChatForRoom, requirePlayer } from "./lib/roomAuth";
 
 async function uniqueCode(ctx: MutationCtx): Promise<string> {
   for (let i = 0; i < 20; i++) {
@@ -142,21 +143,6 @@ async function loadRoomBundle(
   };
 }
 
-async function requirePlayer(
-  ctx: MutationCtx,
-  roomId: Id<"rooms">,
-  clientId: string,
-) {
-  const player = await ctx.db
-    .query("players")
-    .withIndex("by_room_client", (q) =>
-      q.eq("roomId", roomId).eq("clientId", clientId),
-    )
-    .unique();
-  if (!player) fail(GameError.notInRoom);
-  return player;
-}
-
 function seatedFromPlayers(players: Doc<"players">[]): Color[] {
   return COLORS.filter((c) => players.some((p) => p.color === c)) as Color[];
 }
@@ -181,6 +167,7 @@ async function deleteRoomCascade(
   ctx: MutationCtx,
   roomId: Id<"rooms">,
 ) {
+  await clearChatForRoom(ctx, roomId);
   const players = await ctx.db
     .query("players")
     .withIndex("by_room", (q) => q.eq("roomId", roomId))
@@ -1123,6 +1110,7 @@ export const rematch = mutation({
       `Rematch — ${first?.name ?? activeColors[0]} rolls first`,
       now,
     );
+    await clearChatForRoom(ctx, args.roomId);
     await ctx.db.patch(args.roomId, { seatedColors: activeColors });
     logEvent("game_started", {
       roomCode: room.code,

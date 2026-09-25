@@ -17,6 +17,12 @@ export const MAX_JOINS_PER_WINDOW = 3;
 export const ACTION_MIN_INTERVAL_MS = 100;
 /** Minimum gap between heartbeats from one seat. */
 export const HEARTBEAT_MIN_INTERVAL_MS = 5_000;
+/** Max characters in a chat message after sanitize. */
+export const MAX_CHAT_LEN = 200;
+/** Minimum gap between chat sends from one seat. */
+export const CHAT_MIN_INTERVAL_MS = 1_000;
+/** Soft cap on messages kept per room. */
+export const MAX_CHAT_MESSAGES = 100;
 
 export function assertValidClientId(clientId: string): string {
   const id = clientId.trim();
@@ -39,6 +45,20 @@ export function sanitizePlayerName(
 ): string {
   const trimmed = name.trim().slice(0, MAX_NAME_LEN);
   return trimmed || fallback;
+}
+
+/**
+ * Trim, strip control chars, collapse whitespace, cap length.
+ * Throws if nothing usable remains.
+ */
+export function sanitizeChatText(raw: string): string {
+  const cleaned = raw
+    .replace(/[\u0000-\u001F\u007F]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_CHAT_LEN);
+  if (!cleaned) fail(GameError.emptyMessage);
+  return cleaned;
 }
 
 /**

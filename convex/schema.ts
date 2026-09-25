@@ -103,6 +103,8 @@ export default defineSchema({
     joinedAt: v.optional(v.number()),
     /** Last gameplay/presence action — used for action rate-limiting. */
     lastActionAt: v.optional(v.number()),
+    /** Last chat send — separate from gameplay rate-limiting. */
+    lastChatAt: v.optional(v.number()),
     /** Server-driven seat; never accepts client heartbeats as authority. */
     isBot: v.optional(v.boolean()),
   })
@@ -119,4 +121,17 @@ export default defineSchema({
   })
     .index("by_room", ["roomId"])
     .index("by_room_color", ["roomId", "color"]),
+
+  chatMessages: defineTable({
+    roomId: v.id("rooms"),
+    playerId: v.id("players"),
+    /** Display name snapshot at send time. */
+    name: v.string(),
+    /** Seat colour snapshot at send time. */
+    color: colorValidator,
+    text: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_room", ["roomId"])
+    .index("by_room_createdAt", ["roomId", "createdAt"]),
 });

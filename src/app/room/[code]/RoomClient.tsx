@@ -7,6 +7,7 @@ import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { Lobby } from "@/components/Lobby";
 import { GameScreen } from "@/components/GameScreen";
+import { ChatPanel } from "@/components/ChatPanel";
 import { Button, ErrorText, StatusText } from "@/components/ui";
 import {
   formatConvexError,
@@ -213,18 +214,19 @@ export function RoomClient({
     );
   }
 
-  if (data.room.status === "lobby") {
-    return (
-      <Lobby
-        data={data}
-        roomId={data.room._id}
-        clientId={clientId}
-        code={data.room.code}
-      />
-    );
-  }
-
   return (
-    <GameScreen data={data} roomId={data.room._id} clientId={clientId} />
+    <>
+      {data.room.status === "lobby" ? (
+        <Lobby
+          data={data}
+          roomId={data.room._id}
+          clientId={clientId}
+          code={data.room.code}
+        />
+      ) : (
+        <GameScreen data={data} roomId={data.room._id} clientId={clientId} />
+      )}
+      <ChatPanel roomId={data.room._id} clientId={clientId} />
+    </>
   );
 }
