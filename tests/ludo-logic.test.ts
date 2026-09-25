@@ -25,7 +25,12 @@ import {
   absoluteTrackPosition,
   YARD_SIX_WEIGHT,
 } from "../convex/lib/ludo";
-import { pickBotMove } from "../convex/lib/bot";
+import {
+  isInImmediateDanger,
+  isOutsideEnemyYard,
+  pickBotMove,
+  trackDistanceBehind,
+} from "../convex/lib/bot";
 import { assertValidClientId, assertValidRoomCode, assertActionInterval } from "../convex/lib/session";
 import { GameError } from "../convex/lib/errors";
 import { normalizeCode } from "../src/lib/player";
@@ -423,17 +428,50 @@ describe("session, codes, and board geometry", () => {
   });
 });
 
+describe("bot weight helpers", () => {
+  it("trackDistanceBehind wraps the 52-cell track", () => {
+    expect(trackDistanceBehind(50, 2)).toBe(4);
+    expect(trackDistanceBehind(10, 10)).toBe(0);
+    expect(trackDistanceBehind(5, 10)).toBe(5);
+  });
+
+  it("isOutsideEnemyYard detects the cell after an opponent start", () => {
+    // Yellow start 26 → outside is 27; green start 13 → 14.
+    expect(isOutsideEnemyYard(27, "red")).toBe(true);
+    expect(isOutsideEnemyYard(14, "red")).toBe(true);
+    expect(isOutsideEnemyYard(1, "red")).toBe(false); // after own start
+    expect(isOutsideEnemyYard(8, "red")).toBe(false);
+  });
+
+  it("isInImmediateDanger uses the 7-step rule", () => {
+    // Red at abs 10; yellow at abs 7 → dist 3 (danger).
+    // yellow abs = (26 + steps) % 52 = 7 → steps = 33.
+    const danger = [
+      { color: "red" as const, index: 0, steps: 10 },
+      { color: "yellow" as const, index: 0, steps: 33 },
+    ];
+    expect(isInImmediateDanger(danger, "red", 10)).toBe(true);
+
+    // Yellow at abs 3 → dist 7 (not immediate).
+    // (26 + steps) % 52 = 3 → steps = 29.
+    const far = [
+      { color: "red" as const, index: 0, steps: 10 },
+      { color: "yellow" as const, index: 0, steps: 29 },
+    ];
+    expect(isInImmediateDanger(far, "red", 10)).toBe(false);
+
+    // Safe cell is never in danger (red start abs 0).
+    expect(isInImmediateDanger(danger, "red", 0)).toBe(false);
+  });
+});
+
 describe("bot move picker", () => {
   it("prefers a capture over a plain advance", () => {
-    // Red at steps 5 can move 3 → abs 8 (safe) or we put yellow alone on abs of dest.
-    // Red start=0; yellow start=26. Put red at 10, yellow at absolute overlapping with red+3.
-    // red steps 10 → abs 10; dice 3 → dest 13 → abs 13 (green start, safe — no capture).
-    // Use red steps 4, dice 4 → dest 8 → abs 8 (safe).
     // red steps 1, dice 2 → dest 3 → abs 3. Place yellow so its abs is 3:
-    // yellow abs = (26 + steps) % 52 = 3 → steps = (3 - 26 + 52) % 52 = 29.
+    // yellow abs = (26 + steps) % 52 = 3 → steps = 29.
     const tokens = [
       { color: "red" as const, index: 0, steps: 1 },
-      { color: "red" as const, index: 1, steps: -1 },
+      { color: "red" as const, index: 1, steps: 20 },
       { color: "red" as const, index: 2, steps: -1 },
       { color: "red" as const, index: 3, steps: -1 },
       { color: "yellow" as const, index: 0, steps: 29 },
@@ -441,10 +479,7 @@ describe("bot move picker", () => {
       { color: "yellow" as const, index: 2, steps: -1 },
       { color: "yellow" as const, index: 3, steps: -1 },
     ];
-    // Also give red a farther token that does not capture.
-    tokens[1] = { color: "red", index: 1, steps: 20 };
-    const pick = pickBotMove(tokens, "red", 2);
-    expect(pick).toBe(0);
+    expect(pickBotMove(tokens, "red", 2)).toBe(0);
   });
 
   it("prefers finishing over leaving the yard", () => {
@@ -471,5 +506,65 @@ describe("bot move picker", () => {
       { color: "red" as const, index: 3, steps: -1 },
     ];
     expect(pickBotMove(tokens, "red", 3)).toBe(1);
+  });
+
+  it("escapes when an enemy is 1–6 spaces behind", () => {
+    // Token 0 at abs 10 threatened by yellow at abs 7 (dist 3).
+    // Dice 4 → dest 14 leaves threat range (+50 escape).
+    // Token 1 at 25 is safe; plain advance only gets progress.
+    const tokens = [
+      { color: "red" as const, index: 0, steps: 10 },
+      { color: "red" as const, index: 1, steps: 25 },
+      { color: "red" as const, index: 2, steps: -1 },
+      { color: "red" as const, index: 3, steps: -1 },
+      { color: "yellow" as const, index: 0, steps: 33 }, // abs 7
+      { color: "yellow" as const, index: 1, steps: -1 },
+      { color: "yellow" as const, index: 2, steps: -1 },
+      { color: "yellow" as const, index: 3, steps: -1 },
+    ];
+    expect(pickBotMove(tokens, "red", 4)).toBe(0);
+  });
+
+  it("does not treat an enemy 7+ behind as immediate danger", () => {
+    // Token 1 has yellow 7 behind — must not get escape bonus.
+    // Both land unsafe with equal progress → stable tie-break prefers index 0.
+    // If escape were wrongly applied to token 1, it would win instead.
+    const tokens = [
+      { color: "red" as const, index: 0, steps: 22 },
+      { color: "red" as const, index: 1, steps: 15 },
+      { color: "red" as const, index: 2, steps: -1 },
+      { color: "red" as const, index: 3, steps: -1 },
+      // yellow abs 8; red1 abs 15 → dist 7
+      // (26 + steps) % 52 = 8 → steps = 34
+      { color: "yellow" as const, index: 0, steps: 34 },
+      { color: "yellow" as const, index: 1, steps: -1 },
+      { color: "yellow" as const, index: 2, steps: -1 },
+      { color: "yellow" as const, index: 3, steps: -1 },
+    ];
+    // dice 2: token0 22→24, token1 15→17 — both unsafe, equal progress
+    expect(pickBotMove(tokens, "red", 2)).toBe(0);
+  });
+
+  it("prefers deploying a new token when fewer than 2 are active", () => {
+    // Lone runner at 30 vs yard release on 6: deploy (+55+40) beats progress.
+    const tokens = [
+      { color: "red" as const, index: 0, steps: 30 },
+      { color: "red" as const, index: 1, steps: -1 },
+      { color: "red" as const, index: 2, steps: -1 },
+      { color: "red" as const, index: 3, steps: -1 },
+    ];
+    expect(pickBotMove(tokens, "red", 6)).toBe(1);
+  });
+
+  it("prefers a non-stacking landing when scores are otherwise close", () => {
+    // Token 0: steps 10 + 2 → 12, stacks on token 1 (−25).
+    // Token 2: steps 5 + 2 → 7, empty cell.
+    const tokens = [
+      { color: "red" as const, index: 0, steps: 10 },
+      { color: "red" as const, index: 1, steps: 12 },
+      { color: "red" as const, index: 2, steps: 5 },
+      { color: "red" as const, index: 3, steps: -1 },
+    ];
+    expect(pickBotMove(tokens, "red", 2)).toBe(2);
   });
 });
