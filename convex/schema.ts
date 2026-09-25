@@ -105,6 +105,8 @@ export default defineSchema({
     lastActionAt: v.optional(v.number()),
     /** Last chat send — separate from gameplay rate-limiting. */
     lastChatAt: v.optional(v.number()),
+    /** Last troubleshoot report — separate from gameplay rate-limiting. */
+    lastTroubleAt: v.optional(v.number()),
     /** Server-driven seat; never accepts client heartbeats as authority. */
     isBot: v.optional(v.boolean()),
   })

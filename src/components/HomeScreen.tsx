@@ -12,6 +12,11 @@ import {
   storeName,
   useSessionId,
 } from "@/lib/player";
+import {
+  buildTroubleSnapshot,
+  isTroubleshootCoolingDown,
+  runTroubleshoot,
+} from "@/lib/troubleshoot";
 import { bindAudioUnlock } from "@/lib/sounds";
 import { InstallHint } from "./InstallHint";
 import styles from "./HomeScreen.module.css";
@@ -20,18 +25,38 @@ export function HomeScreen() {
   const router = useRouter();
   const createRoom = useMutation(api.rooms.createRoom);
   const createVsComputer = useMutation(api.rooms.createVsComputer);
+  const reportTrouble = useMutation(api.trouble.reportTrouble);
   const [mode, setMode] = useState<"home" | "join" | "computer">("home");
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
   const [botCount, setBotCount] = useState(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [troubleBusy, setTroubleBusy] = useState(false);
   const clientId = useSessionId();
 
   useEffect(() => {
     bindAudioUnlock();
   }, []);
 
+  async function onTroubleshoot() {
+    if (!clientId || troubleBusy || isTroubleshootCoolingDown()) return;
+    setTroubleBusy(true);
+    const snapshot = buildTroubleSnapshot({
+      clientId,
+      code: code || undefined,
+      screen: "home",
+      lastError: error ?? undefined,
+    });
+    await runTroubleshoot({
+      report: (s) => reportTrouble(s),
+      snapshot,
+      clearLocal: () => {
+        setError(null);
+        setBusy(false);
+      },
+    });
+  }
   async function onCreate(e: FormEvent) {
     e.preventDefault();
     if (!clientId) return;
@@ -241,7 +266,15 @@ export function HomeScreen() {
         </form>
       )}
 
-      <ErrorText>{error}</ErrorText>
+      <ErrorText
+        onTroubleshoot={
+          clientId ? () => void onTroubleshoot() : undefined
+        }
+        troubleBusy={troubleBusy}
+        troubleDisabled={isTroubleshootCoolingDown()}
+      >
+        {error}
+      </ErrorText>
       <InstallHint />
     </div>
   );

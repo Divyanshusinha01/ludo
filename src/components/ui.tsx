@@ -71,19 +71,91 @@ export function Button({
   );
 }
 
-export function ErrorText({ children }: { children: ReactNode }) {
-  if (!children) return null;
+const troubleBtnStyle: CSSProperties = {
+  appearance: "none",
+  border: "none",
+  background: "transparent",
+  color: "var(--muted)",
+  textDecoration: "underline",
+  textUnderlineOffset: 3,
+  fontSize: "0.85rem",
+  cursor: "pointer",
+  padding: "0.15rem 0.25rem",
+  touchAction: "manipulation",
+};
+
+type TroubleshootButtonProps = {
+  onClick: () => void;
+  busy?: boolean;
+  disabled?: boolean;
+  /** Quieter chrome link vs under-error CTA */
+  variant?: "link" | "underError";
+};
+
+export function TroubleshootButton({
+  onClick,
+  busy,
+  disabled,
+  variant = "underError",
+}: TroubleshootButtonProps) {
   return (
-    <p
-      role="alert"
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled || busy}
+      aria-busy={busy || undefined}
       style={{
-        margin: 0,
-        color: "var(--danger)",
-        textAlign: "center",
+        ...troubleBtnStyle,
+        fontSize: variant === "link" ? "0.85rem" : "0.8rem",
+        opacity: disabled || busy ? 0.5 : 1,
+        cursor: disabled || busy ? "not-allowed" : "pointer",
       }}
     >
-      {children}
-    </p>
+      {busy ? "Fixing…" : "Troubleshoot"}
+    </button>
+  );
+}
+
+export function ErrorText({
+  children,
+  onTroubleshoot,
+  troubleBusy,
+  troubleDisabled,
+}: {
+  children: ReactNode;
+  onTroubleshoot?: () => void;
+  troubleBusy?: boolean;
+  troubleDisabled?: boolean;
+}) {
+  if (!children) return null;
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: "0.35rem",
+      }}
+    >
+      <p
+        role="alert"
+        style={{
+          margin: 0,
+          color: "var(--danger)",
+          textAlign: "center",
+        }}
+      >
+        {children}
+      </p>
+      {onTroubleshoot && (
+        <TroubleshootButton
+          onClick={onTroubleshoot}
+          busy={troubleBusy}
+          disabled={troubleDisabled}
+          variant="underError"
+        />
+      )}
+    </div>
   );
 }
 

@@ -14,6 +14,11 @@ import {
   formatConvexError,
   type Color,
 } from "@/lib/player";
+import {
+  buildTroubleSnapshot,
+  isTroubleshootCoolingDown,
+  runTroubleshoot,
+} from "@/lib/troubleshoot";
 import styles from "./Lobby.module.css";
 
 export type RoomBundle = NonNullable<FunctionReturnType<typeof api.rooms.getRoom>>;
@@ -31,9 +36,11 @@ export function Lobby({ data, roomId, clientId, code }: Props) {
   const leaveRoom = useMutation(api.rooms.leaveRoom);
   const kickPlayer = useMutation(api.rooms.kickPlayer);
   const addBot = useMutation(api.rooms.addBot);
+  const reportTrouble = useMutation(api.trouble.reportTrouble);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [troubleBusy, setTroubleBusy] = useState(false);
   const [kickBusy, setKickBusy] = useState<Color | null>(null);
   const [addBotBusy, setAddBotBusy] = useState(false);
 
@@ -44,6 +51,29 @@ export function Lobby({ data, roomId, clientId, code }: Props) {
   const canStart = players.length >= 2 && isHost;
   const canAddBot =
     isHost && !room.vsComputer && players.length < 4 && !addBotBusy && !busy;
+
+  async function onTroubleshoot() {
+    if (troubleBusy || isTroubleshootCoolingDown()) return;
+    setTroubleBusy(true);
+    const snapshot = buildTroubleSnapshot({
+      clientId,
+      roomId,
+      code,
+      screen: "lobby",
+      lastError: error ?? undefined,
+      roomStatus: room.status,
+    });
+    await runTroubleshoot({
+      report: (s) => reportTrouble(s),
+      snapshot,
+      clearLocal: () => {
+        setError(null);
+        setBusy(false);
+        setKickBusy(null);
+        setAddBotBusy(false);
+      },
+    });
+  }
 
   async function onStart() {
     setError(null);
@@ -213,7 +243,13 @@ export function Lobby({ data, roomId, clientId, code }: Props) {
           {room.lastEvent}
         </p>
       )}
-      <ErrorText>{error}</ErrorText>
+      <ErrorText
+        onTroubleshoot={() => void onTroubleshoot()}
+        troubleBusy={troubleBusy}
+        troubleDisabled={isTroubleshootCoolingDown()}
+      >
+        {error}
+      </ErrorText>
     </section>
   );
 }

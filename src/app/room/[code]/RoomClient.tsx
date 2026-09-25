@@ -16,6 +16,11 @@ import {
   takePendingJoinName,
   useSessionId,
 } from "@/lib/player";
+import {
+  buildTroubleSnapshot,
+  isTroubleshootCoolingDown,
+  runTroubleshoot,
+} from "@/lib/troubleshoot";
 import styles from "./room.module.css";
 
 function isRoomId(value: string | undefined): value is Id<"rooms"> {
@@ -35,6 +40,7 @@ export function RoomClient({
   const [name, setName] = useState("");
   const [joining, setJoining] = useState(false);
   const [offline, setOffline] = useState(false);
+  const [troubleBusy, setTroubleBusy] = useState(false);
   const pendingJoinTried = useRef(false);
   const roomCode = normalizeCode(code);
   const knownRoomId = isRoomId(roomIdHint) ? roomIdHint : null;
@@ -52,6 +58,7 @@ export function RoomClient({
   );
   const data = knownRoomId ? dataById : dataByCode;
   const joinRoom = useMutation(api.rooms.joinRoom);
+  const reportTrouble = useMutation(api.trouble.reportTrouble);
 
   useEffect(() => {
     const sync = () => setOffline(!navigator.onLine);
@@ -132,6 +139,28 @@ export function RoomClient({
     }
   }
 
+  async function onTroubleshoot() {
+    if (!clientId || troubleBusy || isTroubleshootCoolingDown()) return;
+    setTroubleBusy(true);
+    // No roomId — join screen is pre-seat; membership check would fail.
+    const snapshot = buildTroubleSnapshot({
+      clientId,
+      code: roomCode,
+      screen: "join",
+      lastError: joinError ?? undefined,
+      roomStatus: data?.room.status,
+      offline,
+    });
+    await runTroubleshoot({
+      report: (s) => reportTrouble(s),
+      snapshot,
+      clearLocal: () => {
+        setJoinError(null);
+        setJoining(false);
+      },
+    });
+  }
+
   if (!clientId || (roomCode.length === 6 && roomLoading)) {
     return <StatusText>Connecting…</StatusText>;
   }
@@ -195,7 +224,13 @@ export function RoomClient({
             Join game
           </Button>
         </form>
-        <ErrorText>{joinError}</ErrorText>
+        <ErrorText
+          onTroubleshoot={() => void onTroubleshoot()}
+          troubleBusy={troubleBusy}
+          troubleDisabled={isTroubleshootCoolingDown()}
+        >
+          {joinError}
+        </ErrorText>
         <Link href="/">Back home</Link>
       </div>
     );

@@ -325,7 +325,44 @@ export const createVsComputer = mutation({
     if (botCount < 1 || botCount > 3) fail(GameError.invalidBotCount);
 
     const now = Date.now();
-    await assertCreateNotRateLimited(ctx, clientId, now);
+
+    // Browser back / double-Start leave an active solo room behind. Reuse a
+    // just-created one (debounce), otherwise replace it so Start always works
+    // instead of hitting the shared create rate limit.
+    const latest = await ctx.db
+      .query("rooms")
+      .withIndex("by_host", (q) => q.eq("hostClientId", clientId))
+      .order("desc")
+      .first();
+
+    if (
+      latest?.vsComputer &&
+      (latest.status === "playing" || latest.status === "lobby")
+    ) {
+      if (now - latest.createdAt < 2_000) {
+        const hostPlayer = await ctx.db
+          .query("players")
+          .withIndex("by_room_client", (q) =>
+            q.eq("roomId", latest._id).eq("clientId", clientId),
+          )
+          .unique();
+        if (hostPlayer) {
+          await ctx.db.patch(hostPlayer._id, {
+            name,
+            connected: true,
+            lastSeenAt: now,
+          });
+          return {
+            roomId: latest._id,
+            code: latest.code,
+            color: hostPlayer.color,
+          };
+        }
+      }
+      await deleteRoomCascade(ctx, latest._id);
+    } else {
+      await assertCreateNotRateLimited(ctx, clientId, now);
+    }
 
     const code = await uniqueCode(ctx);
     const hostColor = COLORS[0]!;

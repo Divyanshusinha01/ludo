@@ -21,6 +21,8 @@ export const HEARTBEAT_MIN_INTERVAL_MS = 5_000;
 export const MAX_CHAT_LEN = 200;
 /** Minimum gap between chat sends from one seat. */
 export const CHAT_MIN_INTERVAL_MS = 1_000;
+/** Minimum gap between troubleshoot reports from one seated player. */
+export const TROUBLE_MIN_INTERVAL_MS = 20_000;
 /** Soft cap on messages kept per room. */
 export const MAX_CHAT_MESSAGES = 100;
 

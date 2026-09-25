@@ -19,13 +19,18 @@ import { haptic } from "@/lib/haptics";
 import { bindAudioUnlock, isMuted, playSound, setMuted } from "@/lib/sounds";
 import { Board } from "./Board";
 import { Dice } from "./Dice";
-import { Button, ErrorText } from "./ui";
+import { Button, ErrorText, TroubleshootButton } from "./ui";
 import {
   COLOR_HEX,
   COLOR_LABEL,
   formatConvexError,
   type Color,
 } from "@/lib/player";
+import {
+  buildTroubleSnapshot,
+  isTroubleshootCoolingDown,
+  runTroubleshoot,
+} from "@/lib/troubleshoot";
 import type { RoomBundle } from "./Lobby";
 import styles from "./GameScreen.module.css";
 
@@ -82,10 +87,12 @@ export function GameScreen({ data, roomId, clientId }: Props) {
   const moveToken = useMutation(api.game.moveToken);
   const rematch = useMutation(api.rooms.rematch);
   const leaveRoom = useMutation(api.rooms.leaveRoom);
+  const reportTrouble = useMutation(api.trouble.reportTrouble);
   const [rolling, setRolling] = useState(false);
   const [reveal, setReveal] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [troubleBusy, setTroubleBusy] = useState(false);
   const [muted, setMutedState] = useState(() =>
     typeof window !== "undefined" ? isMuted() : false,
   );
@@ -445,6 +452,39 @@ export function GameScreen({ data, roomId, clientId }: Props) {
     if (!next) playSound("unmute");
   }
 
+  function clearLocalTroubleState() {
+    setLocalDice(null);
+    setOptimisticTokens(null);
+    setError(null);
+    setRolling(false);
+    setReveal(false);
+    setBusy(false);
+    rollLock.current = false;
+    moveLock.current = false;
+  }
+
+  async function onTroubleshoot() {
+    if (troubleBusy || isTroubleshootCoolingDown()) return;
+    setTroubleBusy(true);
+    const snapshot = buildTroubleSnapshot({
+      clientId,
+      roomId,
+      code: room.code,
+      screen: "game",
+      lastError: error ?? undefined,
+      roomStatus: room.status,
+      turnId: room.turnId,
+      diceRolled: room.diceRolled,
+      diceValue: room.diceValue,
+      offline,
+    });
+    await runTroubleshoot({
+      report: (s) => reportTrouble(s),
+      snapshot,
+      clearLocal: clearLocalTroubleState,
+    });
+  }
+
   const waitingLabel = canRoll
     ? undefined
     : myTurn
@@ -485,6 +525,12 @@ export function GameScreen({ data, roomId, clientId }: Props) {
           <div className={styles.topRow}>
             <p className={styles.label}>Room {room.code}</p>
             <div className={styles.topActions}>
+              <TroubleshootButton
+                variant="link"
+                onClick={() => void onTroubleshoot()}
+                busy={troubleBusy}
+                disabled={isTroubleshootCoolingDown()}
+              />
               <button
                 type="button"
                 className={styles.iconBtn}
@@ -751,7 +797,13 @@ export function GameScreen({ data, roomId, clientId }: Props) {
         {!myTurn && room.status === "playing" && !turnAway && (
           <p className={styles.waiting}>Waiting for {turnLabel}…</p>
         )}
-        <ErrorText>{error}</ErrorText>
+        <ErrorText
+          onTroubleshoot={() => void onTroubleshoot()}
+          troubleBusy={troubleBusy}
+          troubleDisabled={isTroubleshootCoolingDown()}
+        >
+          {error}
+        </ErrorText>
       </div>
     </div>
   );
