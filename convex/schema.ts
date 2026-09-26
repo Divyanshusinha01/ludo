@@ -156,4 +156,28 @@ export default defineSchema({
     .index("by_room_status", ["roomId", "status"])
     .index("by_player", ["playerId"])
     .index("by_requester", ["requesterClientId"]),
+
+  /**
+   * Who is in voice for a room. Heartbeat via updatedAt; clients filter
+   * stale rows (~20s). Signaling only — audio is peer-to-peer WebRTC.
+   */
+  voicePeers: defineTable({
+    roomId: v.id("rooms"),
+    color: colorValidator,
+    updatedAt: v.number(),
+  })
+    .index("by_room", ["roomId"])
+    .index("by_room_color", ["roomId", "color"]),
+
+  /** WebRTC signaling (SDP offer/answer + ICE). Routed by seat color. */
+  voiceSignals: defineTable({
+    roomId: v.id("rooms"),
+    fromColor: colorValidator,
+    toColor: colorValidator,
+    type: v.union(v.literal("offer"), v.literal("answer"), v.literal("ice")),
+    payload: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_room_to", ["roomId", "toColor"])
+    .index("by_room", ["roomId"]),
 });

@@ -8,6 +8,7 @@ import type { Id } from "../../../../convex/_generated/dataModel";
 import { Lobby } from "@/components/Lobby";
 import { GameScreen } from "@/components/GameScreen";
 import { ChatPanel } from "@/components/ChatPanel";
+import { VoicePanel } from "@/components/VoicePanel";
 import { Button, ErrorText, StatusText } from "@/components/ui";
 import {
   formatConvexError,
@@ -303,6 +304,8 @@ export function RoomClient({
     );
   }
 
+  const mePlayer = data.players.find((p) => p.isMe);
+
   return (
     <>
       {data.room.status === "lobby" ? (
@@ -314,6 +317,19 @@ export function RoomClient({
         />
       ) : (
         <GameScreen data={data} roomId={data.room._id} clientId={clientId} />
+      )}
+      {!data.room.vsComputer && mePlayer && (
+        <VoicePanel
+          roomId={data.room._id}
+          clientId={clientId}
+          myColor={mePlayer.color}
+          players={data.players.map((p) => ({
+            name: p.name,
+            color: p.color,
+            isMe: p.isMe,
+            isBot: p.isBot,
+          }))}
+        />
       )}
       <ChatPanel
         roomId={data.room._id}

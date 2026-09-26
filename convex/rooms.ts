@@ -28,7 +28,12 @@ import {
 } from "./lib/session";
 import { colorValidator } from "./schema";
 import { freshEvents, withEvent, withEvents } from "./lib/events";
-import { clearChatForRoom, requirePlayer } from "./lib/roomAuth";
+import {
+  clearChatForRoom,
+  clearVoiceForColor,
+  clearVoiceForRoom,
+  requirePlayer,
+} from "./lib/roomAuth";
 
 async function uniqueCode(ctx: MutationCtx): Promise<string> {
   for (let i = 0; i < 20; i++) {
@@ -168,6 +173,7 @@ async function deleteRoomCascade(
   roomId: Id<"rooms">,
 ) {
   await clearChatForRoom(ctx, roomId);
+  await clearVoiceForRoom(ctx, roomId);
   const players = await ctx.db
     .query("players")
     .withIndex("by_room", (q) => q.eq("roomId", roomId))
@@ -1043,6 +1049,9 @@ export const leaveRoom = mutation({
       clientId,
     });
 
+    // Drop from voice immediately so peers tear down (don't wait for stale timeout).
+    await clearVoiceForColor(ctx, args.roomId, player.color as Color);
+
     // Solo vs-computer: human leaving ends the room (bots alone are useless).
     if (room.vsComputer && !player.isBot) {
       await deleteRoomCascade(ctx, args.roomId);
@@ -1332,6 +1341,7 @@ export const kickPlayer = mutation({
       fail(GameError.onlyHost);
     }
 
+    await clearVoiceForColor(ctx, args.roomId, target.color as Color);
     await ctx.db.delete(target._id);
     const remaining = await ctx.db
       .query("players")
@@ -1462,6 +1472,7 @@ export const rematch = mutation({
       now,
     );
     await clearChatForRoom(ctx, args.roomId);
+    await clearVoiceForRoom(ctx, args.roomId);
     await ctx.db.patch(args.roomId, { seatedColors: activeColors });
     logEvent("game_started", {
       roomCode: room.code,

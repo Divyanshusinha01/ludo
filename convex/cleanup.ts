@@ -3,7 +3,7 @@ import { Id } from "./_generated/dataModel";
 import { buildFinalRankings, Color } from "./lib/ludo";
 import { withEvent } from "./lib/events";
 import { logEvent } from "./lib/log";
-import { clearChatForRoom } from "./lib/roomAuth";
+import { clearChatForRoom, clearVoiceForRoom } from "./lib/roomAuth";
 
 /** Mark away if no heartbeat within this window. */
 const STALE_MS = 45_000;
@@ -17,11 +17,21 @@ const PLAYING_ABANDON_MS = 30 * 60 * 1000;
 const UNDERPOPULATED_MS = 90_000;
 /** Expire unanswered rejoin requests after this long. */
 const REJOIN_PENDING_TTL_MS = 3 * 60 * 1000;
+/** Drop orphaned WebRTC signals (tab died mid-negotiation). */
+const VOICE_SIGNAL_TTL_MS = 3 * 60 * 1000;
 
 export const tick = internalMutation({
   args: {},
   handler: async (ctx) => {
     const now = Date.now();
+
+    // Orphaned voice signals (no by_createdAt index — scan is fine; volume is low).
+    const voiceSignals = await ctx.db.query("voiceSignals").collect();
+    for (const s of voiceSignals) {
+      if (now - s.createdAt > VOICE_SIGNAL_TTL_MS) {
+        await ctx.db.delete(s._id);
+      }
+    }
 
     // Lobby TTL — createdAt is required, so a range query is exact.
     const expiredLobbies = await ctx.db
@@ -176,6 +186,7 @@ export const tick = internalMutation({
 async function deleteRoomCascade(ctx: MutationCtx, roomId: Id<"rooms">) {
   const room = await ctx.db.get(roomId);
   await clearChatForRoom(ctx, roomId);
+  await clearVoiceForRoom(ctx, roomId);
   const players = await ctx.db
     .query("players")
     .withIndex("by_room", (q) => q.eq("roomId", roomId))

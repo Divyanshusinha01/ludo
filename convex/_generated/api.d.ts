@@ -21,6 +21,7 @@ import type * as lib_roomAuth from "../lib/roomAuth.js";
 import type * as lib_session from "../lib/session.js";
 import type * as rooms from "../rooms.js";
 import type * as trouble from "../trouble.js";
+import type * as voice from "../voice.js";
 
 import type {
   ApiFromModules,
@@ -42,6 +43,7 @@ declare const fullApi: ApiFromModules<{
   "lib/session": typeof lib_session;
   rooms: typeof rooms;
   trouble: typeof trouble;
+  voice: typeof voice;
 }>;
 
 /**

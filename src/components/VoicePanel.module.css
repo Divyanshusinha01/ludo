@@ -1,0 +1,165 @@
+.root {
+  position: fixed;
+  z-index: 29;
+  left: max(0.75rem, var(--safe-left));
+  bottom: max(0.75rem, var(--safe-bottom));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  pointer-events: none;
+  max-width: min(100vw - 1.5rem, 280px);
+}
+
+.toggle,
+.action,
+.segBtn,
+.ptt {
+  pointer-events: auto;
+  appearance: none;
+  border: 1px solid rgba(30, 24, 16, 0.15);
+  background: rgba(255, 255, 255, 0.92);
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.45rem 0.7rem;
+  cursor: pointer;
+  touch-action: manipulation;
+  color: var(--ink);
+  box-shadow: 0 2px 10px rgba(30, 24, 16, 0.12);
+}
+
+.toggle:hover,
+.action:hover,
+.segBtn:hover {
+  background: #fff;
+}
+
+.panel {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.45rem;
+  background: rgba(255, 252, 245, 0.97);
+  border: 1px solid rgba(30, 24, 16, 0.14);
+  border-radius: 12px;
+  box-shadow: 0 6px 20px rgba(30, 24, 16, 0.14);
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.segment {
+  display: inline-flex;
+  border: 1px solid rgba(30, 24, 16, 0.14);
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.segBtn {
+  box-shadow: none;
+  border: none;
+  border-radius: 0;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: transparent;
+}
+
+.segActive {
+  background: var(--ink);
+  color: #fff;
+}
+
+.action {
+  box-shadow: none;
+  font-size: 0.75rem;
+  padding: 0.35rem 0.55rem;
+}
+
+.ptt {
+  box-shadow: none;
+  flex: 1;
+  min-width: 8rem;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.pttActive {
+  background: var(--ink);
+  color: #fff;
+  border-color: transparent;
+}
+
+.peers {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.55rem;
+}
+
+.peer {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--c);
+  flex-shrink: 0;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+
+.dotLive {
+  opacity: 1;
+}
+
+.dotWait {
+  opacity: 0.45;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+.peerName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 5.5rem;
+}
+
+.hiddenAudio {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.root :global(.error) {
+  pointer-events: auto;
+  font-size: 0.75rem;
+  max-width: 16rem;
+}
