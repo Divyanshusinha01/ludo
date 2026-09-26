@@ -711,6 +711,7 @@ export function GameScreen({ data, roomId, clientId }: Props) {
           </span>
           <Dice
             value={diceValue}
+            color={room.currentTurn as Color}
             rolling={rolling}
             disabled={!canRoll}
             waitingLabel={waitingLabel}

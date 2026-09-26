@@ -536,6 +536,7 @@ function OfflineGameScreenInner({ onStartNew, game, data }: InnerProps) {
           </span>
           <Dice
             value={diceValue}
+            color={room.currentTurn as Color}
             rolling={rolling}
             disabled={!canRoll}
             waitingLabel={waitingLabel}

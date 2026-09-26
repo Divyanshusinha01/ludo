@@ -1,10 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { COLOR_HEX, type Color } from "@/lib/player";
 import styles from "./Dice.module.css";
 
 type Props = {
   value: number | null;
+  /** House color of the player whose turn it is. */
+  color: Color;
   rolling?: boolean;
   disabled?: boolean;
   waitingLabel?: string;
@@ -24,6 +27,7 @@ const FACES: Record<number, number[]> = {
 
 export function Dice({
   value,
+  color,
   rolling,
   disabled,
   waitingLabel,
@@ -65,6 +69,7 @@ export function Dice({
     <button
       type="button"
       className={`${styles.dice} ${rolling ? styles.rolling : ""} ${reveal && !rolling && value ? styles.reveal : ""} ${!disabled && !rolling ? styles.ready : ""}`}
+      style={{ ["--dice-c" as string]: COLOR_HEX[color] }}
       onClick={onRoll}
       disabled={disabled}
       aria-label={label}
