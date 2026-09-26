@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Fraunces, DM_Sans } from "next/font/google";
+import { Analytics } from "@vercel/analytics/next";
 import { ConvexClientProvider } from "@/components/ConvexClientProvider";
 import { ServiceWorkerRegister } from "@/components/ServiceWorkerRegister";
 import "./globals.css";
@@ -42,6 +43,7 @@ export default function RootLayout({
       <body>
         <ConvexClientProvider>{children}</ConvexClientProvider>
         <ServiceWorkerRegister />
+        <Analytics />
       </body>
     </html>
   );
