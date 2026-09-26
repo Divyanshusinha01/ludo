@@ -20,6 +20,7 @@ import {
 import { COLOR_HEX, type Color } from "@/lib/player";
 import { STEP_MS } from "@/hooks/useTokenAnimation";
 import { prefersReducedMotion } from "@/lib/webgl";
+import { bindWebGLFailure } from "@/lib/webgl3dState";
 
 export type TokenLayerToken = {
   color: Color;
@@ -537,11 +538,11 @@ export function TokenLayer3D({
       orthographic
       dpr={[1, 1.5]}
       gl={{ antialias: true, alpha: true, powerPreference: "low-power" }}
+      onCreated={({ gl }) => bindWebGLFailure(gl)}
       style={{
-        position: "absolute",
-        inset: 0,
         width: "100%",
         height: "100%",
+        display: "block",
         pointerEvents: "none",
         touchAction: "none",
       }}

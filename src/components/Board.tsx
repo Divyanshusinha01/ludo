@@ -10,7 +10,7 @@ import {
   tokenStackKey,
   tokenSvgPosition,
 } from "@/lib/boardGeometry";
-import { useCanUse3D } from "@/hooks/useCanUse3D";
+import { useCanUse3DBoard } from "@/hooks/useCanUse3D";
 import { COLOR_HEX, type Color } from "@/lib/player";
 import {
   rankHouseLabel,
@@ -153,7 +153,7 @@ export function Board({
   const positions = stackedPositions(tokens);
   const svgRef = useRef<SVGSVGElement>(null);
   const interactive = selectable.length > 0 && !!onSelectToken;
-  const use3D = useCanUse3D() && render3DTokens;
+  const use3D = useCanUse3DBoard() && render3DTokens;
 
   // Stack sizes for visual badges on overlapping tokens.
   const stackSizes = new Map<string, number>();
@@ -514,14 +514,16 @@ export function Board({
         })}
       </svg>
       {use3D && (
-        <TokenLayer3D
-          tokens={tokens}
-          selectable={selectable}
-          myColor={myColor}
-          activeColor={activeColor}
-          fx={fx}
-          winBurstKey={winBurstKey}
-        />
+        <div className={styles.layer3d} aria-hidden>
+          <TokenLayer3D
+            tokens={tokens}
+            selectable={selectable}
+            myColor={myColor}
+            activeColor={activeColor}
+            fx={fx}
+            winBurstKey={winBurstKey}
+          />
+        </div>
       )}
     </div>
   );

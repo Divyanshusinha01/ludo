@@ -1,11 +1,27 @@
 .wrap {
   position: relative;
+  display: grid;
+  grid-template: 1fr / 1fr;
   /* Cap by remaining viewport so chrome + board fit without page scroll */
   width: min(100%, 92vw, 560px, var(--board-max, 58dvh));
   margin: 0 auto;
   aspect-ratio: 1;
   flex: 0 0 auto;
   filter: drop-shadow(0 12px 28px rgba(40, 30, 10, 0.22));
+  overflow: hidden;
+  border-radius: 16px;
+}
+
+.wrap > * {
+  grid-area: 1 / 1;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.layer3d {
+  pointer-events: none;
 }
 
 @media (max-height: 740px) {
@@ -21,10 +37,7 @@
 }
 
 .svg {
-  width: 100%;
-  height: 100%;
   display: block;
-  border-radius: 16px;
   touch-action: manipulation;
 }
 

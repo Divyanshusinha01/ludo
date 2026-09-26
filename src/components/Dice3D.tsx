@@ -5,6 +5,7 @@ import { Canvas, useFrame } from "@react-three/fiber";
 import { RoundedBox } from "@react-three/drei";
 import * as THREE from "three";
 import { COLOR_HEX, type Color } from "@/lib/player";
+import { bindWebGLFailure } from "@/lib/webgl3dState";
 
 /** Pip indices per face — same layout as Dice.tsx CSS grid. */
 const FACES: Record<number, number[]> = {
@@ -179,6 +180,7 @@ export function Dice3D({ value, color, rolling }: Props) {
     <Canvas
       dpr={[1, 1.5]}
       gl={{ antialias: true, alpha: true, powerPreference: "low-power" }}
+      onCreated={({ gl }) => bindWebGLFailure(gl)}
       camera={{ position: [0, 0.35, 2.4], fov: 35 }}
       style={{
         width: "100%",

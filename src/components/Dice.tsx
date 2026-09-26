@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
-import { useCanUse3D } from "@/hooks/useCanUse3D";
+import { useCanUse3DDice } from "@/hooks/useCanUse3D";
 import { COLOR_HEX, type Color } from "@/lib/player";
 import styles from "./Dice.module.css";
 
@@ -41,7 +41,7 @@ export function Dice({
   reveal,
   onRoll,
 }: Props) {
-  const use3D = useCanUse3D();
+  const use3D = useCanUse3DDice();
   const [spinFace, setSpinFace] = useState<number | null>(null);
 
   useEffect(() => {
