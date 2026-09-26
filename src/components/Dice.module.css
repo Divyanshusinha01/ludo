@@ -33,6 +33,9 @@
   opacity: 0.55;
   cursor: not-allowed;
   box-shadow: 0 2px 0 color-mix(in srgb, var(--dice-c) 55%, #000);
+}
+
+.dice:disabled:not(.rolling) {
   animation: none;
 }
 

@@ -29,6 +29,13 @@ export function shouldAnimateRemoteRoll(prev: DiceSnap, next: DiceSnap): boolean
   return becameRolled || rollAgain || faceChangedWhilePending;
 }
 
+function clearTimer(ref: React.MutableRefObject<ReturnType<typeof setTimeout> | null>) {
+  if (ref.current) {
+    clearTimeout(ref.current);
+    ref.current = null;
+  }
+}
+
 /**
  * When another player rolls (or a bot rolls offline), the server/state updates
  * with the final face immediately. Run the same spin + reveal as a local roll.
@@ -59,22 +66,66 @@ export function useOpponentDiceRoll(options: {
   } = options;
 
   const prevRef = useRef<DiceSnap | null>(null);
+  const spinUntilRef = useRef(0);
+  const remoteSpinRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-      if (revealTimerRef.current) clearTimeout(revealTimerRef.current);
+      clearTimer(timerRef);
+      clearTimer(revealTimerRef);
     };
   }, []);
 
   useEffect(() => {
+    function finishRemoteSpin() {
+      clearTimer(timerRef);
+      remoteSpinRef.current = false;
+      spinUntilRef.current = 0;
+      setRolling(false);
+      setReveal(true);
+      clearTimer(revealTimerRef);
+      revealTimerRef.current = setTimeout(() => {
+        revealTimerRef.current = null;
+        setReveal(false);
+      }, revealMs);
+    }
+
+    function cancelRemoteSpin() {
+      clearTimer(timerRef);
+      clearTimer(revealTimerRef);
+      remoteSpinRef.current = false;
+      spinUntilRef.current = 0;
+      setRolling(false);
+      setReveal(false);
+    }
+
+    function scheduleSpinFinish() {
+      clearTimer(timerRef);
+      const wait = Math.max(0, spinUntilRef.current - Date.now());
+      timerRef.current = setTimeout(() => {
+        timerRef.current = null;
+        if (Date.now() < spinUntilRef.current) {
+          scheduleSpinFinish();
+          return;
+        }
+        finishRemoteSpin();
+      }, wait);
+    }
+
     const next: DiceSnap = { turnId, diceRolled, diceValue };
 
     if (!playing) {
       prevRef.current = next;
+      if (remoteSpinRef.current) {
+        cancelRemoteSpin();
+      }
       return;
+    }
+
+    if (myTurn && remoteSpinRef.current && !rollLock.current) {
+      cancelRemoteSpin();
     }
 
     const prev = prevRef.current;
@@ -84,22 +135,17 @@ export function useOpponentDiceRoll(options: {
 
     if (!shouldAnimateRemoteRoll(prev, next)) return;
 
-    if (timerRef.current) clearTimeout(timerRef.current);
-    if (revealTimerRef.current) clearTimeout(revealTimerRef.current);
-
+    clearTimer(revealTimerRef);
     setReveal(false);
+
+    spinUntilRef.current = Math.max(
+      spinUntilRef.current,
+      Date.now() + minSpinMs,
+    );
+    remoteSpinRef.current = true;
     setRolling(true);
     playSound("roll");
-
-    timerRef.current = setTimeout(() => {
-      timerRef.current = null;
-      setRolling(false);
-      setReveal(true);
-      revealTimerRef.current = setTimeout(() => {
-        revealTimerRef.current = null;
-        setReveal(false);
-      }, revealMs);
-    }, minSpinMs);
+    scheduleSpinFinish();
   }, [
     playing,
     myTurn,
