@@ -12,7 +12,6 @@ import type { Id } from "../../convex/_generated/dataModel";
 import type { Color } from "@/lib/player";
 import { getIceServers } from "@/lib/webrtc";
 
-export type VoiceMode = "open" | "ptt";
 export type PeerVoiceStatus = "connecting" | "connected";
 
 const HEARTBEAT_MS = 8_000;
@@ -25,16 +24,10 @@ type PeerSlot = {
   makingOffer: boolean;
 };
 
-function applyMicEnabled(
-  stream: MediaStream | null,
-  mode: VoiceMode,
-  muted: boolean,
-  pttActive: boolean,
-) {
+function applyMicEnabled(stream: MediaStream | null, muted: boolean) {
   if (!stream) return;
-  const enabled = mode === "open" ? !muted : pttActive;
   for (const track of stream.getAudioTracks()) {
-    track.enabled = enabled;
+    track.enabled = !muted;
   }
 }
 
@@ -44,9 +37,7 @@ export function useRoomVoice(
   myColor: Color,
 ) {
   const [enabled, setEnabled] = useState(false);
-  const [mode, setMode] = useState<VoiceMode>("open");
-  const [muted, setMuted] = useState(false);
-  const [pttActive, setPttActive] = useState(false);
+  const [muted, setMuted] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [peerStatus, setPeerStatus] = useState<
     Partial<Record<Color, PeerVoiceStatus>>
@@ -235,10 +226,10 @@ export function useRoomVoice(
     }
   }, []);
 
-  // Keep mic track.enabled in sync with mode / mute / PTT.
+  // Keep mic track.enabled in sync with mute.
   useEffect(() => {
-    applyMicEnabled(localStreamRef.current, mode, muted, pttActive);
-  }, [mode, muted, pttActive]);
+    applyMicEnabled(localStreamRef.current, muted);
+  }, [muted]);
 
   // Heartbeat clock for listPeers staleness filter.
   useEffect(() => {
@@ -385,7 +376,7 @@ export function useRoomVoice(
     processedIdsRef.current.clear();
     setPeerStatus({});
     setRemoteStreams({});
-    setPttActive(false);
+    setMuted(true);
     try {
       await leaveVoice({ roomId, clientId });
     } catch {
@@ -402,7 +393,9 @@ export function useRoomVoice(
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       localStreamRef.current = stream;
-      applyMicEnabled(stream, mode, muted, false);
+      // Join muted — tap the speaker to unmute and talk.
+      setMuted(true);
+      applyMicEnabled(stream, true);
       enabledRef.current = true;
       setNow(Date.now());
       setEnabled(true);
@@ -417,7 +410,7 @@ export function useRoomVoice(
       enabledRef.current = false;
       setEnabled(false);
     }
-  }, [mode, muted, joinVoice, roomId, clientId]);
+  }, [joinVoice, roomId, clientId]);
 
   const disable = useCallback(async () => {
     setEnabled(false);
@@ -435,39 +428,18 @@ export function useRoomVoice(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const setVoiceMode = useCallback((next: VoiceMode) => {
-    setMode(next);
-    if (next === "ptt") {
-      setPttActive(false);
-      setMuted(false);
-    }
-  }, []);
-
   const toggleMute = useCallback(() => {
     setMuted((m) => !m);
   }, []);
 
-  const pttDown = useCallback(() => {
-    setPttActive(true);
-  }, []);
-
-  const pttUp = useCallback(() => {
-    setPttActive(false);
-  }, []);
-
   return {
     enabled,
-    mode,
     muted,
-    pttActive,
     error,
     peerStatus,
     remoteStreams,
     enable,
     disable,
-    setMode: setVoiceMode,
     toggleMute,
-    pttDown,
-    pttUp,
   };
 }

@@ -12,9 +12,7 @@
 }
 
 .toggle,
-.action,
-.segBtn,
-.ptt {
+.micBtn {
   pointer-events: auto;
   appearance: none;
   border: 1px solid rgba(30, 24, 16, 0.15);
@@ -30,8 +28,7 @@
 }
 
 .toggle:hover,
-.action:hover,
-.segBtn:hover {
+.micBtn:hover {
   background: #fff;
 }
 
@@ -54,47 +51,36 @@
   gap: 0.35rem;
 }
 
-.segment {
+.micBtn {
   display: inline-flex;
-  border: 1px solid rgba(30, 24, 16, 0.14);
-  border-radius: 8px;
-  overflow: hidden;
-  background: rgba(255, 255, 255, 0.7);
+  align-items: center;
+  justify-content: center;
+  width: 2.4rem;
+  height: 2.4rem;
+  padding: 0;
+  border-radius: 999px;
 }
 
-.segBtn {
-  box-shadow: none;
-  border: none;
-  border-radius: 0;
-  padding: 0.35rem 0.5rem;
-  font-size: 0.72rem;
-  font-weight: 600;
-  background: transparent;
-}
-
-.segActive {
-  background: var(--ink);
-  color: #fff;
-}
-
-.action {
-  box-shadow: none;
-  font-size: 0.75rem;
-  padding: 0.35rem 0.55rem;
-}
-
-.ptt {
-  box-shadow: none;
-  flex: 1;
-  min-width: 8rem;
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-.pttActive {
+.micLive {
   background: var(--ink);
   color: #fff;
   border-color: transparent;
+}
+
+.micLive:hover {
+  background: #2a2218;
+  color: #fff;
+}
+
+.micMuted {
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--muted);
+}
+
+.micIcon {
+  width: 1.15rem;
+  height: 1.15rem;
+  display: block;
 }
 
 .peers {
