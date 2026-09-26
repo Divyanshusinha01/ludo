@@ -1,0 +1,23 @@
+{
+  "name": "Family Ludo",
+  "short_name": "Ludo",
+  "description": "Play Ludo online or offline on one device.",
+  "start_url": "/offline",
+  "display": "standalone",
+  "background_color": "#e8d9b8",
+  "theme_color": "#e8d9b8",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

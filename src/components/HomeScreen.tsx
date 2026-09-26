@@ -177,6 +177,14 @@ export function HomeScreen() {
           >
             Play vs computer
           </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={busy}
+            onClick={() => router.push("/offline")}
+          >
+            Play offline
+          </Button>
         </form>
       ) : mode === "computer" ? (
         <form className={styles.actions} onSubmit={onVsComputer}>

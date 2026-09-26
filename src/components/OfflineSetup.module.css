@@ -1,0 +1,141 @@
+.shell {
+  width: min(100%, 440px);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.header {
+  text-align: left;
+}
+
+.brand {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 9vw, 2.8rem);
+  color: var(--ink);
+}
+
+.sub {
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.seats {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.seat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.85rem 1rem;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.seatHead {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+
+.swatch {
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 999px;
+  background: var(--c);
+  flex-shrink: 0;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.field input {
+  appearance: none;
+  border: 2px solid rgba(30, 24, 16, 0.15);
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: 12px;
+  padding: 0.65rem 0.85rem;
+  font-size: 1rem;
+  color: var(--ink);
+  font-family: inherit;
+}
+
+.toggleRow {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.toggle {
+  flex: 1;
+  appearance: none;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 999px;
+  padding: 0.45rem 0.75rem;
+  font-family: inherit;
+  font-size: 0.9rem;
+  background: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+}
+
+.toggleActive {
+  flex: 1;
+  appearance: none;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 0.45rem 0.75rem;
+  font-family: inherit;
+  font-size: 0.9rem;
+  background: rgba(255, 200, 87, 0.35);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.countRow {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.countBtn {
+  flex: 1;
+  appearance: none;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 999px;
+  padding: 0.55rem;
+  font-family: inherit;
+  background: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+}
+
+.countActive {
+  flex: 1;
+  appearance: none;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 0.55rem;
+  font-family: inherit;
+  background: rgba(255, 200, 87, 0.35);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}

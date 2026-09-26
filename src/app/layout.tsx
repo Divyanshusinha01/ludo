@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Fraunces, DM_Sans } from "next/font/google";
 import { ConvexClientProvider } from "@/components/ConvexClientProvider";
+import { ServiceWorkerRegister } from "@/components/ServiceWorkerRegister";
 import "./globals.css";
 
 const display = Fraunces({
@@ -16,6 +17,7 @@ const body = DM_Sans({
 export const metadata: Metadata = {
   title: "Family Ludo",
   description: "Play 2–4 player Ludo online with a room code — no accounts needed.",
+  manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     title: "Family Ludo",
@@ -39,6 +41,7 @@ export default function RootLayout({
     <html lang="en" className={`${display.variable} ${body.variable}`}>
       <body>
         <ConvexClientProvider>{children}</ConvexClientProvider>
+        <ServiceWorkerRegister />
       </body>
     </html>
   );

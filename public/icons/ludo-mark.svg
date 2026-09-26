@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Family Ludo">
+  <rect width="512" height="512" rx="96" fill="#e8d9b8"/>
+  <rect x="64" y="64" width="384" height="384" rx="48" fill="#1a1208" opacity="0.08"/>
+  <circle cx="160" cy="160" r="48" fill="#e53935"/>
+  <circle cx="352" cy="160" r="48" fill="#43a047"/>
+  <circle cx="160" cy="352" r="48" fill="#e6a100"/>
+  <circle cx="352" cy="352" r="48" fill="#1e88e5"/>
+  <text x="256" y="280" text-anchor="middle" font-family="Georgia, serif" font-size="120" fill="#1a1208">L</text>
+</svg>
