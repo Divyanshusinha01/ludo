@@ -33,11 +33,30 @@ export function HomeScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [troubleBusy, setTroubleBusy] = useState(false);
+  const [offline, setOffline] = useState(false);
   const clientId = useSessionId();
 
   useEffect(() => {
     bindAudioUnlock();
   }, []);
+
+  useEffect(() => {
+    const sync = () => setOffline(!navigator.onLine);
+    sync();
+    window.addEventListener("online", sync);
+    window.addEventListener("offline", sync);
+    return () => {
+      window.removeEventListener("online", sync);
+      window.removeEventListener("offline", sync);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (offline && mode !== "home") {
+      setMode("home");
+      setBusy(false);
+    }
+  }, [offline, mode]);
 
   async function onTroubleshoot() {
     if (!clientId || troubleBusy || isTroubleshootCoolingDown()) return;
@@ -47,6 +66,7 @@ export function HomeScreen() {
       code: code || undefined,
       screen: "home",
       lastError: error ?? undefined,
+      offline,
     });
     await runTroubleshoot({
       report: (s) => reportTrouble(s),
@@ -59,7 +79,7 @@ export function HomeScreen() {
   }
   async function onCreate(e: FormEvent) {
     e.preventDefault();
-    if (!clientId) return;
+    if (!clientId || offline) return;
     const trimmed = name.trim();
     if (!trimmed) {
       setError("Enter your name");
@@ -80,7 +100,7 @@ export function HomeScreen() {
 
   function onJoin(e: FormEvent) {
     e.preventDefault();
-    if (!clientId) return;
+    if (!clientId || offline) return;
     setError(null);
     const trimmed = name.trim();
     if (!trimmed) {
@@ -114,8 +134,9 @@ export function HomeScreen() {
           <Button
             type="button"
             variant="primary"
-            disabled={busy}
+            disabled={busy || offline}
             onClick={() => {
+              if (offline) return;
               setError(null);
               setMode("online");
             }}
@@ -130,14 +151,20 @@ export function HomeScreen() {
           >
             Play Offline
           </Button>
+          {offline && (
+            <p className={styles.hint} role="status">
+              No internet — Play Online is unavailable. Use Play Offline.
+            </p>
+          )}
         </div>
       ) : mode === "online" ? (
         <div className={styles.actions}>
           <Button
             type="button"
             variant="primary"
-            disabled={busy || !clientId}
+            disabled={busy || offline || !clientId}
             onClick={() => {
+              if (offline) return;
               setError(null);
               setMode("create");
             }}
@@ -147,8 +174,9 @@ export function HomeScreen() {
           <Button
             type="button"
             variant="secondary"
-            disabled={busy || !clientId}
+            disabled={busy || offline || !clientId}
             onClick={() => {
+              if (offline) return;
               setError(null);
               setMode("join");
             }}
@@ -188,7 +216,7 @@ export function HomeScreen() {
           <Button
             type="submit"
             variant="primary"
-            disabled={busy || !name.trim() || !clientId}
+            disabled={busy || offline || !name.trim() || !clientId}
           >
             Create game
           </Button>
@@ -228,7 +256,7 @@ export function HomeScreen() {
             type="submit"
             variant="primary"
             disabled={
-              busy || !name.trim() || code.length !== 6 || !clientId
+              busy || offline || !name.trim() || code.length !== 6 || !clientId
             }
           >
             Join room
