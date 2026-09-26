@@ -32,6 +32,7 @@ import {
   runTroubleshoot,
 } from "@/lib/troubleshoot";
 import type { RoomBundle } from "./Lobby";
+import { RejoinRequests } from "./RejoinRequests";
 import styles from "./GameScreen.module.css";
 
 type Props = {
@@ -579,6 +580,12 @@ export function GameScreen({ data, roomId, clientId }: Props) {
           )}
         </div>
       </header>
+
+      <RejoinRequests
+        roomId={roomId}
+        clientId={clientId}
+        isHost={!!me?.isHost}
+      />
 
       {myTurn && room.status === "playing" && (
         <div className={styles.yourTurn} role="status">

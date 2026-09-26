@@ -25,6 +25,9 @@ export const GameError = {
   invalidDice: "Invalid dice state",
   vsComputerOnly: "This game is vs computer only",
   invalidBotCount: "Choose 1 to 3 computer opponents",
+  nameTaken: "That name is already in this room",
+  rejoinDenied: "Host denied your rejoin request",
+  rejoinExpired: "Rejoin request expired — try again",
 } as const;
 
 export type GameErrorMessage = (typeof GameError)[keyof typeof GameError];

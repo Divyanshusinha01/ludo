@@ -138,4 +138,22 @@ export default defineSchema({
   })
     .index("by_room", ["roomId"])
     .index("by_room_createdAt", ["roomId", "createdAt"]),
+
+  /** Host-approved reclaim of a disconnected seat by matching name. */
+  rejoinRequests: defineTable({
+    roomId: v.id("rooms"),
+    playerId: v.id("players"),
+    requesterClientId: v.string(),
+    requesterName: v.string(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("approved"),
+      v.literal("denied"),
+    ),
+    createdAt: v.number(),
+    resolvedAt: v.optional(v.number()),
+  })
+    .index("by_room_status", ["roomId", "status"])
+    .index("by_player", ["playerId"])
+    .index("by_requester", ["requesterClientId"]),
 });

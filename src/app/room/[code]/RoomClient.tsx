@@ -41,6 +41,8 @@ export function RoomClient({
   const [joining, setJoining] = useState(false);
   const [offline, setOffline] = useState(false);
   const [troubleBusy, setTroubleBusy] = useState(false);
+  const [pendingRequestId, setPendingRequestId] =
+    useState<Id<"rejoinRequests"> | null>(null);
   const pendingJoinTried = useRef(false);
   const roomCode = normalizeCode(code);
   const knownRoomId = isRoomId(roomIdHint) ? roomIdHint : null;
@@ -60,6 +62,11 @@ export function RoomClient({
   const joinRoom = useMutation(api.rooms.joinRoom);
   const reportTrouble = useMutation(api.trouble.reportTrouble);
 
+  const requestStatus = useQuery(
+    api.rooms.getRejoinRequestStatus,
+    pendingRequestId ? { requestId: pendingRequestId } : "skip",
+  );
+
   useEffect(() => {
     const sync = () => setOffline(!navigator.onLine);
     sync();
@@ -71,6 +78,23 @@ export function RoomClient({
     };
   }, []);
 
+  // Approved rejoin: seat clientId now matches — clear pending state.
+  useEffect(() => {
+    if (data?.me && pendingRequestId) {
+      setPendingRequestId(null);
+      setJoinError(null);
+    }
+  }, [data?.me, pendingRequestId]);
+
+  // Denied / expired request — let the user retry.
+  useEffect(() => {
+    if (!pendingRequestId || !requestStatus) return;
+    if (requestStatus.status === "denied") {
+      setPendingRequestId(null);
+      setJoinError("Host denied your rejoin request — try again or use a different name");
+    }
+  }, [pendingRequestId, requestStatus]);
+
   const roomStatus = data?.room.status;
   const hasMe = !!data?.me;
   const roomMissing = data === null;
@@ -79,7 +103,9 @@ export function RoomClient({
   // Home "Join game" already collected a name — join once, no prefill UI.
   useEffect(() => {
     if (!clientId || roomLoading || roomMissing || hasMe) return;
-    if (roomStatus !== "lobby" || pendingJoinTried.current || joining) return;
+    if (pendingRequestId || pendingJoinTried.current || joining) return;
+    // Auto-join only in lobby; mid-game rejoin needs explicit name entry.
+    if (roomStatus !== "lobby") return;
 
     const pending = takePendingJoinName();
     if (!pending) return;
@@ -92,6 +118,12 @@ export function RoomClient({
       setJoining(true);
       setJoinError(null);
       void joinRoom({ code: roomCode, clientId, name: pending })
+        .then((result) => {
+          if (cancelled) return;
+          if ("pending" in result && result.pending) {
+            setPendingRequestId(result.requestId);
+          }
+        })
         .catch((err) => {
           pendingJoinTried.current = false;
           setJoinError(formatConvexError(err, "Could not join"));
@@ -113,6 +145,7 @@ export function RoomClient({
     roomCode,
     joinRoom,
     joining,
+    pendingRequestId,
   ]);
 
   async function onJoin(e: FormEvent) {
@@ -127,11 +160,14 @@ export function RoomClient({
     setJoinError(null);
     try {
       storeName(trimmed);
-      await joinRoom({
+      const result = await joinRoom({
         code: roomCode,
         clientId,
         name: trimmed,
       });
+      if ("pending" in result && result.pending) {
+        setPendingRequestId(result.requestId);
+      }
     } catch (err) {
       setJoinError(formatConvexError(err, "Could not join"));
     } finally {
@@ -157,6 +193,7 @@ export function RoomClient({
       clearLocal: () => {
         setJoinError(null);
         setJoining(false);
+        setPendingRequestId(null);
       },
     });
   }
@@ -186,24 +223,41 @@ export function RoomClient({
     );
   }
 
-  if (!hasMe && roomStatus !== "lobby") {
+  if (pendingRequestId && !hasMe) {
     return (
       <div className={styles.center}>
-        <h1>Could not join</h1>
-        <p>This game already started and you are not in it.</p>
+        <h1>Waiting for host…</h1>
+        <p>
+          Your rejoin request was sent. The host needs to allow you back in.
+        </p>
+        <StatusText>Waiting for approval…</StatusText>
+        <Button
+          variant="secondary"
+          onClick={() => {
+            setPendingRequestId(null);
+            setJoinError(null);
+          }}
+        >
+          Cancel
+        </Button>
         <Link href="/">Back home</Link>
       </div>
     );
   }
 
-  if (!hasMe && roomStatus === "lobby") {
+  if (!hasMe) {
     if (joining) {
       return <StatusText>Joining room…</StatusText>;
     }
+    const midGame = roomStatus === "playing" || roomStatus === "finished";
     return (
       <div className={styles.center}>
-        <h1>Join room {roomCode}</h1>
-        <p>Type your name to sit down.</p>
+        <h1>{midGame ? `Rejoin room ${roomCode}` : `Join room ${roomCode}`}</h1>
+        <p>
+          {midGame
+            ? "Game already in progress — enter the same name you used before to request a rejoin."
+            : "Type your name to sit down."}
+        </p>
         <form className={styles.joinForm} onSubmit={onJoin}>
           <label className={styles.field}>
             Your name
@@ -221,7 +275,7 @@ export function RoomClient({
             variant="primary"
             disabled={joining || !name.trim() || !clientId}
           >
-            Join game
+            {midGame ? "Request rejoin" : "Join game"}
           </Button>
         </form>
         <ErrorText

@@ -165,8 +165,8 @@ async function main() {
     clientId: p2b,
     name: "Yellow2",
   });
-  assert(recon.reconnected === true, "reconnect works");
-  assert(recon.color === "yellow", "reconnect keeps colour");
+  assert(!("pending" in recon) && recon.reconnected === true, "reconnect works");
+  assert(!("pending" in recon) && recon.color === "yellow", "reconnect keeps colour");
   mark("reconnect keeps seat");
 
   await expectReject(
@@ -469,7 +469,10 @@ async function main() {
     clientId: finishHost,
     name: "F1",
   });
-  assert(reconFin.reconnected === true, "seated reconnect after finish");
+  assert(
+    !("pending" in reconFin) && reconFin.reconnected === true,
+    "seated reconnect after finish",
+  );
   mark("seated player can reconnect after finish");
 
   console.log("\n=== 7. Post-action / state integrity ===");

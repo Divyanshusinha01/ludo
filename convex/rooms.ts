@@ -178,6 +178,27 @@ async function deleteRoomCascade(
     .withIndex("by_room", (q) => q.eq("roomId", roomId))
     .collect();
   for (const t of tokens) await ctx.db.delete(t._id);
+  const rejoinPending = await ctx.db
+    .query("rejoinRequests")
+    .withIndex("by_room_status", (q) =>
+      q.eq("roomId", roomId).eq("status", "pending"),
+    )
+    .collect();
+  for (const r of rejoinPending) await ctx.db.delete(r._id);
+  const rejoinApproved = await ctx.db
+    .query("rejoinRequests")
+    .withIndex("by_room_status", (q) =>
+      q.eq("roomId", roomId).eq("status", "approved"),
+    )
+    .collect();
+  for (const r of rejoinApproved) await ctx.db.delete(r._id);
+  const rejoinDenied = await ctx.db
+    .query("rejoinRequests")
+    .withIndex("by_room_status", (q) =>
+      q.eq("roomId", roomId).eq("status", "denied"),
+    )
+    .collect();
+  for (const r of rejoinDenied) await ctx.db.delete(r._id);
   await ctx.db.delete(roomId);
 }
 
@@ -256,12 +277,73 @@ async function resetBoard(
   });
 }
 
-const joinResultValidator = v.object({
-  roomId: v.id("rooms"),
-  code: v.string(),
-  color: colorValidator,
-  reconnected: v.optional(v.boolean()),
-});
+const joinResultValidator = v.union(
+  v.object({
+    roomId: v.id("rooms"),
+    code: v.string(),
+    color: colorValidator,
+    reconnected: v.optional(v.boolean()),
+  }),
+  v.object({
+    pending: v.literal(true),
+    requestId: v.id("rejoinRequests"),
+  }),
+);
+
+function namesMatch(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+async function claimDisconnectedSeat(
+  ctx: MutationCtx,
+  seat: Doc<"players">,
+  room: Doc<"rooms">,
+  clientId: string,
+  name: string,
+  now: number,
+) {
+  await ctx.db.patch(seat._id, {
+    clientId,
+    name,
+    connected: true,
+    lastSeenAt: now,
+  });
+  // If this seat was the previous host and room still points at old id, keep host.
+  // Host stays whoever currently holds hostClientId; reclaiming does not steal it
+  // unless the room's hostClientId still equals the old seat clientId.
+  if (room.hostClientId === seat.clientId) {
+    await ctx.db.patch(room._id, {
+      hostClientId: clientId,
+      lastActivityAt: now,
+    });
+  } else {
+    await ctx.db.patch(room._id, { lastActivityAt: now });
+  }
+  // Resolve any pending rejoin requests for this seat.
+  const pending = await ctx.db
+    .query("rejoinRequests")
+    .withIndex("by_player", (q) => q.eq("playerId", seat._id))
+    .collect();
+  for (const req of pending) {
+    if (req.status === "pending") {
+      await ctx.db.patch(req._id, {
+        status: "approved",
+        resolvedAt: now,
+      });
+    }
+  }
+  logEvent("player_reconnected", {
+    roomCode: room.code,
+    color: seat.color,
+    clientId,
+  });
+  return {
+    roomId: room._id,
+    code: room.code,
+    color: seat.color,
+    reconnected: true as const,
+  };
+}
 
 export const createRoom = mutation({
   args: {
@@ -566,6 +648,95 @@ export const joinRoom = mutation({
 
     if (room.vsComputer) fail(GameError.vsComputerOnly);
 
+    const players = await ctx.db
+      .query("players")
+      .withIndex("by_room", (q) => q.eq("roomId", room._id))
+      .collect();
+
+    // Name-based reclaim: same name as a disconnected seat, different clientId.
+    const nameMatch = players.find(
+      (p) =>
+        !p.isBot &&
+        p.clientId !== clientId &&
+        namesMatch(p.name, name),
+    );
+
+    if (nameMatch) {
+      if (nameMatch.connected) {
+        fail(GameError.nameTaken);
+      }
+      if (nameMatch.eliminated) {
+        fail(GameError.eliminated);
+      }
+
+      const otherConnectedHumans = players.filter(
+        (p) =>
+          !p.isBot &&
+          p.connected &&
+          p._id !== nameMatch._id,
+      );
+
+      // Nobody left to approve, or reclaiming the host seat (host is offline
+      // and cannot approve themselves) — reclaim immediately.
+      const reclaimingHost = room.hostClientId === nameMatch.clientId;
+      if (otherConnectedHumans.length === 0 || reclaimingHost) {
+        return await claimDisconnectedSeat(
+          ctx,
+          nameMatch,
+          room,
+          clientId,
+          name,
+          now,
+        );
+      }
+
+      // Reuse an existing pending request from this client for this seat.
+      const existingPending = await ctx.db
+        .query("rejoinRequests")
+        .withIndex("by_player", (q) => q.eq("playerId", nameMatch._id))
+        .collect();
+      const mine = existingPending.find(
+        (r) =>
+          r.status === "pending" && r.requesterClientId === clientId,
+      );
+      if (mine) {
+        await ctx.db.patch(mine._id, {
+          requesterName: name,
+          createdAt: now,
+        });
+        return { pending: true as const, requestId: mine._id };
+      }
+
+      // Deny any other pending requests for the same seat (one reclaim at a time).
+      for (const r of existingPending) {
+        if (r.status === "pending") {
+          await ctx.db.patch(r._id, {
+            status: "denied",
+            resolvedAt: now,
+          });
+        }
+      }
+
+      const requestId = await ctx.db.insert("rejoinRequests", {
+        roomId: room._id,
+        playerId: nameMatch._id,
+        requesterClientId: clientId,
+        requesterName: name,
+        status: "pending",
+        createdAt: now,
+      });
+      await ctx.db.patch(room._id, {
+        lastActivityAt: now,
+        lastEvent: `${name} wants to rejoin as ${nameMatch.color}`,
+      });
+      logEvent("rejoin_requested", {
+        roomCode: room.code,
+        color: nameMatch.color,
+        clientId,
+      });
+      return { pending: true as const, requestId };
+    }
+
     if (room.status !== "lobby") {
       if (room.status === "finished") fail(GameError.gameFinished);
       fail(GameError.gameStarted);
@@ -583,11 +754,6 @@ export const joinRoom = mutation({
     if (recentJoins.length >= MAX_JOINS_PER_WINDOW) {
       fail(GameError.rateLimited);
     }
-
-    const players = await ctx.db
-      .query("players")
-      .withIndex("by_room", (q) => q.eq("roomId", room._id))
-      .collect();
 
     if (players.length >= 4) fail(GameError.roomFull);
 
@@ -693,6 +859,154 @@ export const markDisconnected = mutation({
     logEvent("player_disconnected", {
       color: player.color,
       clientId,
+    });
+    return null;
+  },
+});
+
+const rejoinRequestPublicValidator = v.object({
+  _id: v.id("rejoinRequests"),
+  requesterName: v.string(),
+  playerColor: colorValidator,
+  createdAt: v.number(),
+});
+
+export const getRejoinRequestStatus = query({
+  args: {
+    requestId: v.id("rejoinRequests"),
+  },
+  returns: v.union(
+    v.object({
+      status: v.union(
+        v.literal("pending"),
+        v.literal("approved"),
+        v.literal("denied"),
+      ),
+    }),
+    v.null(),
+  ),
+  handler: async (ctx, args) => {
+    const req = await ctx.db.get(args.requestId);
+    if (!req) return null;
+    return { status: req.status };
+  },
+});
+
+export const listPendingRejoinRequests = query({
+  args: {
+    roomId: v.id("rooms"),
+    clientId: v.string(),
+  },
+  returns: v.array(rejoinRequestPublicValidator),
+  handler: async (ctx, args) => {
+    let clientId: string;
+    try {
+      clientId = assertValidClientId(args.clientId);
+    } catch {
+      return [];
+    }
+    const room = await ctx.db.get(args.roomId);
+    if (!room || room.hostClientId !== clientId) return [];
+
+    const pending = await ctx.db
+      .query("rejoinRequests")
+      .withIndex("by_room_status", (q) =>
+        q.eq("roomId", args.roomId).eq("status", "pending"),
+      )
+      .collect();
+
+    const results: Array<{
+      _id: Id<"rejoinRequests">;
+      requesterName: string;
+      playerColor: Color;
+      createdAt: number;
+    }> = [];
+
+    for (const req of pending) {
+      const seat = await ctx.db.get(req.playerId);
+      if (!seat) continue;
+      results.push({
+        _id: req._id,
+        requesterName: req.requesterName,
+        playerColor: seat.color as Color,
+        createdAt: req.createdAt,
+      });
+    }
+    return results;
+  },
+});
+
+export const respondRejoinRequest = mutation({
+  args: {
+    requestId: v.id("rejoinRequests"),
+    clientId: v.string(),
+    approve: v.boolean(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const clientId = assertValidClientId(args.clientId);
+    const req = await ctx.db.get(args.requestId);
+    if (!req) fail(GameError.roomNotFound);
+    if (req.status !== "pending") return null;
+
+    const room = await ctx.db.get(req.roomId);
+    if (!room) fail(GameError.roomNotFound);
+    if (room.hostClientId !== clientId) fail(GameError.onlyHost);
+
+    const now = Date.now();
+
+    if (!args.approve) {
+      await ctx.db.patch(req._id, {
+        status: "denied",
+        resolvedAt: now,
+      });
+      await ctx.db.patch(room._id, {
+        lastActivityAt: now,
+        lastEvent: `Host denied ${req.requesterName}'s rejoin`,
+      });
+      logEvent("rejoin_denied", {
+        roomCode: room.code,
+        clientId: req.requesterClientId,
+      });
+      return null;
+    }
+
+    const seat = await ctx.db.get(req.playerId);
+    if (!seat || seat.connected) {
+      await ctx.db.patch(req._id, {
+        status: "denied",
+        resolvedAt: now,
+      });
+      fail(GameError.rejoinExpired);
+    }
+
+    // Ensure requester isn't already seated as someone else in this room.
+    const requesterSeat = await ctx.db
+      .query("players")
+      .withIndex("by_room_client", (q) =>
+        q
+          .eq("roomId", room._id)
+          .eq("clientId", req.requesterClientId),
+      )
+      .unique();
+    if (requesterSeat && requesterSeat._id !== seat._id) {
+      await ctx.db.patch(req._id, {
+        status: "denied",
+        resolvedAt: now,
+      });
+      fail(GameError.nameTaken);
+    }
+
+    await claimDisconnectedSeat(
+      ctx,
+      seat,
+      room,
+      req.requesterClientId,
+      req.requesterName,
+      now,
+    );
+    await ctx.db.patch(room._id, {
+      lastEvent: `${req.requesterName} rejoined as ${seat.color}`,
     });
     return null;
   },

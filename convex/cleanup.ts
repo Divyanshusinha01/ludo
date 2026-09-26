@@ -15,6 +15,8 @@ const PLAYING_IDLE_MS = 2 * 60 * 60 * 1000;
 const PLAYING_ABANDON_MS = 30 * 60 * 1000;
 /** End game when fewer than 2 connected humans for this long. */
 const UNDERPOPULATED_MS = 90_000;
+/** Expire unanswered rejoin requests after this long. */
+const REJOIN_PENDING_TTL_MS = 3 * 60 * 1000;
 
 export const tick = internalMutation({
   args: {},
@@ -59,6 +61,29 @@ export const tick = internalMutation({
       .query("rooms")
       .withIndex("by_status", (q) => q.eq("status", "playing"))
       .collect();
+
+    const lobbyRooms = await ctx.db
+      .query("rooms")
+      .withIndex("by_status", (q) => q.eq("status", "lobby"))
+      .collect();
+
+    // Expire pending rejoin requests in live rooms.
+    for (const room of [...lobbyRooms, ...playingRooms]) {
+      const pending = await ctx.db
+        .query("rejoinRequests")
+        .withIndex("by_room_status", (q) =>
+          q.eq("roomId", room._id).eq("status", "pending"),
+        )
+        .collect();
+      for (const req of pending) {
+        if (now - req.createdAt > REJOIN_PENDING_TTL_MS) {
+          await ctx.db.patch(req._id, {
+            status: "denied",
+            resolvedAt: now,
+          });
+        }
+      }
+    }
 
     for (const room of playingRooms) {
       const activityAge = now - (room.lastActivityAt ?? room.createdAt);
@@ -162,6 +187,16 @@ async function deleteRoomCascade(ctx: MutationCtx, roomId: Id<"rooms">) {
     .withIndex("by_room", (q) => q.eq("roomId", roomId))
     .collect();
   for (const t of tokens) await ctx.db.delete(t._id);
+
+  for (const status of ["pending", "approved", "denied"] as const) {
+    const requests = await ctx.db
+      .query("rejoinRequests")
+      .withIndex("by_room_status", (q) =>
+        q.eq("roomId", roomId).eq("status", status),
+      )
+      .collect();
+    for (const r of requests) await ctx.db.delete(r._id);
+  }
 
   await ctx.db.delete(roomId);
   if (room) {

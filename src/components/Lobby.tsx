@@ -19,6 +19,7 @@ import {
   isTroubleshootCoolingDown,
   runTroubleshoot,
 } from "@/lib/troubleshoot";
+import { RejoinRequests } from "./RejoinRequests";
 import styles from "./Lobby.module.css";
 
 export type RoomBundle = NonNullable<FunctionReturnType<typeof api.rooms.getRoom>>;
@@ -205,6 +206,8 @@ export function Lobby({ data, roomId, clientId, code }: Props) {
           );
         })}
       </ul>
+
+      <RejoinRequests roomId={roomId} clientId={clientId} isHost={isHost} />
 
       {isHost && !room.vsComputer && (
         <Button

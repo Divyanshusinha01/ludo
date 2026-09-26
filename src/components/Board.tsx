@@ -25,6 +25,16 @@ export type BoardToken = {
 /** Invisible hit radius in SVG units — large enough for fingers. */
 const TOKEN_HIT_RADIUS = 48;
 
+/** Sphere shading: light (highlight), mid, dark (rim). */
+const TOKEN_3D: Record<Color, { light: string; mid: string; dark: string }> = {
+  red: { light: "#ff8a80", mid: "#e53935", dark: "#b71c1c" },
+  green: { light: "#81c784", mid: "#43a047", dark: "#2e7d32" },
+  yellow: { light: "#ffe082", mid: "#e6a100", dark: "#b37a00" },
+  blue: { light: "#64b5f6", mid: "#1e88e5", dark: "#0d47a1" },
+};
+
+const TOKEN_COLORS: Color[] = ["red", "green", "yellow", "blue"];
+
 type Props = {
   tokens: BoardToken[];
   selectable?: number[];
@@ -193,6 +203,59 @@ export function Board({
         style={interactive ? { cursor: "pointer" } : undefined}
         onPointerDown={handlePointer}
       >
+        <defs>
+          {TOKEN_COLORS.map((color) => {
+            const g = TOKEN_3D[color];
+            return (
+              <radialGradient
+                key={`grad-${color}`}
+                id={`tokenGrad-${color}`}
+                fx="35%"
+                fy="30%"
+                cx="50%"
+                cy="50%"
+                r="65%"
+              >
+                <stop offset="0%" stopColor={g.light} />
+                <stop offset="45%" stopColor={g.mid} />
+                <stop offset="100%" stopColor={g.dark} />
+              </radialGradient>
+            );
+          })}
+          <radialGradient
+            id="tokenSpecular"
+            fx="40%"
+            fy="35%"
+            cx="50%"
+            cy="50%"
+            r="50%"
+          >
+            <stop offset="0%" stopColor="#fff" stopOpacity={0.9} />
+            <stop offset="55%" stopColor="#fff" stopOpacity={0.25} />
+            <stop offset="100%" stopColor="#fff" stopOpacity={0} />
+          </radialGradient>
+          <radialGradient
+            id="tokenRimShade"
+            fx="50%"
+            fy="85%"
+            cx="50%"
+            cy="70%"
+            r="60%"
+          >
+            <stop offset="0%" stopColor="#000" stopOpacity={0.35} />
+            <stop offset="70%" stopColor="#000" stopOpacity={0} />
+          </radialGradient>
+          <filter
+            id="tokenShadowBlur"
+            x="-50%"
+            y="-50%"
+            width="200%"
+            height="200%"
+          >
+            <feGaussianBlur in="SourceGraphic" stdDeviation="2.5" />
+          </filter>
+        </defs>
+
         <rect width={size} height={size} fill="#f7f3e8" rx={24} />
 
         {(Object.keys(YARD_RECTS) as Color[]).map((color) => {
@@ -389,24 +452,32 @@ export function Board({
                 {canSelect && (
                   <circle r={TOKEN_HIT_RADIUS} fill="transparent" />
                 )}
-                <circle
-                  r={shadowR}
+                <ellipse
+                  rx={shadowR * 0.95}
+                  ry={shadowR * 0.45}
                   fill="#111"
-                  opacity={0.2}
-                  cy={finished ? 2 : 3}
+                  opacity={0.28}
+                  cy={finished ? bodyR * 0.55 : bodyR * 0.65}
+                  filter="url(#tokenShadowBlur)"
                 />
                 <circle
                   r={bodyR}
-                  fill={COLOR_HEX[t.color]}
+                  fill={`url(#tokenGrad-${t.color})`}
                   stroke="#1e1810"
                   strokeWidth={strokeW}
                 />
                 <circle
-                  r={finished ? 5 : 8}
-                  fill="#fff"
-                  opacity={0.45}
-                  cx={finished ? -4 : -6}
-                  cy={finished ? -4 : -6}
+                  r={bodyR - strokeW * 0.5}
+                  fill="url(#tokenRimShade)"
+                  pointerEvents="none"
+                />
+                <ellipse
+                  rx={finished ? 7 : 10}
+                  ry={finished ? 5 : 7}
+                  fill="url(#tokenSpecular)"
+                  cx={finished ? -5 : -7}
+                  cy={finished ? -6 : -8}
+                  pointerEvents="none"
                 />
                 {/* Token number helps distinguish overlaps of the same colour */}
                 {!finished && (
