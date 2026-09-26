@@ -70,6 +70,7 @@ function OfflineGameScreenInner({ onStartNew, game, data }: InnerProps) {
   );
   const lastTurnId = useRef<number | null>(null);
   const winPlayed = useRef(false);
+  const [winBurstKey, setWinBurstKey] = useState(0);
   const rollLock = useRef(false);
   const moveLock = useRef(false);
 
@@ -142,6 +143,7 @@ function OfflineGameScreenInner({ onStartNew, game, data }: InnerProps) {
       winPlayed.current = true;
       playSound("win");
       haptic("win");
+      setWinBurstKey((k) => k + 1);
     }
     if (data.room.status === "playing") {
       winPlayed.current = false;
@@ -561,6 +563,7 @@ function OfflineGameScreenInner({ onStartNew, game, data }: InnerProps) {
           finishRanks={finishRanks}
           playerCount={players.length}
           fx={fx}
+          winBurstKey={winBurstKey}
           onSelectToken={onSelectToken}
         />
       </div>

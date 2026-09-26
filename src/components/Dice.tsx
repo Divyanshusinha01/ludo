@@ -1,8 +1,15 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
+import { useCanUse3D } from "@/hooks/useCanUse3D";
 import { COLOR_HEX, type Color } from "@/lib/player";
 import styles from "./Dice.module.css";
+
+const Dice3D = dynamic(
+  () => import("./Dice3D").then((m) => m.Dice3D),
+  { ssr: false },
+);
 
 type Props = {
   value: number | null;
@@ -34,27 +41,26 @@ export function Dice({
   reveal,
   onRoll,
 }: Props) {
+  const use3D = useCanUse3D();
   const [spinFace, setSpinFace] = useState<number | null>(null);
 
   useEffect(() => {
-    if (!rolling) {
+    if (!rolling || use3D) {
       setSpinFace(null);
       return;
     }
-    // Start immediately so the "Roll" hint doesn't linger for a frame.
+    // CSS fallback spin — start immediately so "Roll" doesn't linger.
     let last = 1 + Math.floor(Math.random() * 6);
     setSpinFace(last);
     const id = setInterval(() => {
       let next = 1 + Math.floor(Math.random() * 6);
-      // Avoid repeating the same face so the spin reads as motion.
       if (next === last) next = (next % 6) + 1;
       last = next;
       setSpinFace(next);
     }, 40);
     return () => clearInterval(id);
-  }, [rolling]);
+  }, [rolling, use3D]);
 
-  // While rolling, animate with spinFace; otherwise show the server value.
   const shown = rolling ? (spinFace ?? value) : value;
   const pips =
     shown && shown >= 1 && shown <= 6 ? FACES[shown] : [];
@@ -68,19 +74,28 @@ export function Dice({
   return (
     <button
       type="button"
-      className={`${styles.dice} ${rolling ? styles.rolling : ""} ${reveal && !rolling && value ? styles.reveal : ""} ${!disabled && !rolling ? styles.ready : ""}`}
+      className={`${styles.dice} ${rolling ? styles.rolling : ""} ${reveal && !rolling && value ? styles.reveal : ""} ${!disabled && !rolling ? styles.ready : ""} ${use3D ? styles.dice3d : ""}`}
       style={{ ["--dice-c" as string]: COLOR_HEX[color] }}
       onClick={onRoll}
       disabled={disabled}
       aria-label={label}
       aria-disabled={disabled}
     >
-      <span className={styles.face}>
-        {pips?.map((i) => (
-          <span key={i} className={`${styles.pip} ${styles[`p${i}`]}`} />
-        ))}
-        {!shown && <span className={styles.hint}>Roll</span>}
-      </span>
+      {use3D ? (
+        <span className={styles.canvasWrap} aria-hidden>
+          <Dice3D value={value} color={color} rolling={rolling} />
+          {!value && !rolling && (
+            <span className={styles.hint}>Roll</span>
+          )}
+        </span>
+      ) : (
+        <span className={styles.face}>
+          {pips?.map((i) => (
+            <span key={i} className={`${styles.pip} ${styles[`p${i}`]}`} />
+          ))}
+          {!shown && <span className={styles.hint}>Roll</span>}
+        </span>
+      )}
     </button>
   );
 }

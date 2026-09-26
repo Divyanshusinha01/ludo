@@ -41,6 +41,23 @@
   box-shadow: 0 2px 0 color-mix(in srgb, var(--dice-c) 55%, #000);
 }
 
+.dice3d {
+  /* 3D canvas fills the button; drop the CSS shake so R3F tumble reads cleanly */
+  overflow: hidden;
+}
+
+.dice3d.rolling {
+  animation: none;
+}
+
+.canvasWrap {
+  display: block;
+  width: 100%;
+  height: 100%;
+  position: relative;
+  pointer-events: none;
+}
+
 .face {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

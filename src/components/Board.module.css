@@ -1,4 +1,5 @@
 .wrap {
+  position: relative;
   /* Cap by remaining viewport so chrome + board fit without page scroll */
   width: min(100%, 92vw, 560px, var(--board-max, 58dvh));
   margin: 0 auto;

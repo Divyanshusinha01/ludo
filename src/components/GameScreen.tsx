@@ -106,6 +106,7 @@ export function GameScreen({ data, roomId, clientId }: Props) {
   );
   const lastTurnId = useRef<number | null>(null);
   const winPlayed = useRef(false);
+  const [winBurstKey, setWinBurstKey] = useState(0);
   const rollLock = useRef(false);
   const moveLock = useRef(false);
 
@@ -195,12 +196,13 @@ export function GameScreen({ data, roomId, clientId }: Props) {
     }
   }, [data]);
 
-  // Win sound (once)
+  // Win sound + confetti (once)
   useEffect(() => {
     if (data.room.status === "finished" && data.room.winner && !winPlayed.current) {
       winPlayed.current = true;
       playSound("win");
       haptic("win");
+      setWinBurstKey((k) => k + 1);
     }
     if (data.room.status === "playing") {
       winPlayed.current = false;
@@ -736,6 +738,7 @@ export function GameScreen({ data, roomId, clientId }: Props) {
           finishRanks={finishRanks}
           playerCount={players.length}
           fx={fx}
+          winBurstKey={winBurstKey}
           onSelectToken={onSelectToken}
         />
       </div>

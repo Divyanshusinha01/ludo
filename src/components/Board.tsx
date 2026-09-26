@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useCallback, useRef, type PointerEvent } from "react";
 import {
   CELL,
@@ -9,12 +10,18 @@ import {
   tokenStackKey,
   tokenSvgPosition,
 } from "@/lib/boardGeometry";
+import { useCanUse3D } from "@/hooks/useCanUse3D";
 import { COLOR_HEX, type Color } from "@/lib/player";
 import {
   rankHouseLabel,
   resolveTokenHit,
 } from "../../convex/lib/ludo";
 import styles from "./Board.module.css";
+
+const TokenLayer3D = dynamic(
+  () => import("./TokenLayer3D").then((m) => m.TokenLayer3D),
+  { ssr: false },
+);
 
 export type BoardToken = {
   color: Color;
@@ -50,6 +57,10 @@ type Props = {
     homeKey?: string;
     leaveKey?: string;
   };
+  /** Prefer 3D pawns when WebGL is available (default true). */
+  render3DTokens?: boolean;
+  /** Bumps to spawn a board-wide win confetti burst. */
+  winBurstKey?: number | string | null;
   onSelectToken?: (tokenIndex: number) => void;
 };
 
@@ -134,12 +145,15 @@ export function Board({
   finishRanks = {},
   playerCount = 0,
   fx,
+  render3DTokens = true,
+  winBurstKey = null,
   onSelectToken,
 }: Props) {
   const size = 15 * CELL;
   const positions = stackedPositions(tokens);
   const svgRef = useRef<SVGSVGElement>(null);
   const interactive = selectable.length > 0 && !!onSelectToken;
+  const use3D = useCanUse3D() && render3DTokens;
 
   // Stack sizes for visual badges on overlapping tokens.
   const stackSizes = new Map<string, number>();
@@ -388,7 +402,8 @@ export function Board({
           fill={COLOR_HEX.red}
         />
 
-        {tokens.map((t) => {
+        {!use3D &&
+          tokens.map((t) => {
           const key = `${t.color}-${t.index}`;
           const pos =
             positions.get(key) ??
@@ -498,6 +513,16 @@ export function Board({
           );
         })}
       </svg>
+      {use3D && (
+        <TokenLayer3D
+          tokens={tokens}
+          selectable={selectable}
+          myColor={myColor}
+          activeColor={activeColor}
+          fx={fx}
+          winBurstKey={winBurstKey}
+        />
+      )}
     </div>
   );
 }
