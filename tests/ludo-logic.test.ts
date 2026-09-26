@@ -12,6 +12,7 @@ import {
   legalIndexesAtSameCell,
   nextColorAmong,
   pickNextColor,
+  seatingColors,
   rankHouseLabel,
   resolveTokenHit,
   rollFairDice,
@@ -76,6 +77,9 @@ describe("turn order and seating", () => {
     expect(pickNextColor(["red", "yellow", "green"])).toBe("blue");
     expect(pickNextColor(["red", "green", "yellow", "blue"])).toBeUndefined();
     expect(nextColorAmong("red", ["red", "yellow"])).toBe("yellow");
+    expect(seatingColors(2)).toEqual(["red", "yellow"]);
+    expect(seatingColors(3)).toEqual(["red", "yellow", "green"]);
+    expect(seatingColors(4)).toEqual(["red", "yellow", "green", "blue"]);
   });
 });
 

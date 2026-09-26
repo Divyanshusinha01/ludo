@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { COLORS, type Color } from "../../convex/lib/ludo";
+import { seatingColors } from "../../convex/lib/ludo";
 import { botDisplayName } from "../../convex/lib/bot";
 import { createOfflineGame } from "@/lib/offline/engine";
 import { COLOR_HEX, COLOR_LABEL } from "@/lib/player";
@@ -26,7 +26,7 @@ export function OfflineSetup({ onStart, onBack }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   function defaultSeats(count: number): SeatDraft[] {
-    return COLORS.slice(0, count).map((_, i) => ({
+    return seatingColors(count).map((_, i) => ({
       name: i === 0 ? "Player 1" : i === 1 ? "Player 2" : `Player ${i + 1}`,
       isBot: false,
     }));
@@ -57,7 +57,7 @@ export function OfflineSetup({ onStart, onBack }: Props) {
   function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
-    const colors = COLORS.slice(0, playerCount) as Color[];
+    const colors = seatingColors(playerCount);
     const configured = seats.slice(0, playerCount).map((s, i) => ({
       color: colors[i]!,
       name: s.isBot ? botDisplayName(seats.slice(0, i).filter((x) => x.isBot).length) : s.name.trim() || `Player ${i + 1}`,
@@ -84,7 +84,7 @@ export function OfflineSetup({ onStart, onBack }: Props) {
     }
   }
 
-  const colors = COLORS.slice(0, playerCount) as Color[];
+  const colors = seatingColors(playerCount);
 
   return (
     <div className={styles.shell}>

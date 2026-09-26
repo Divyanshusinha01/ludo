@@ -22,6 +22,18 @@ export function pickNextColor(seated: Color[]): Color | undefined {
   return COLORS.find((c) => !seated.includes(c));
 }
 
+/** Fixed seat order for a full table of `count` players (2–4). */
+export function seatingColors(count: number): Color[] {
+  const seated: Color[] = [];
+  const n = Math.min(4, Math.max(0, Math.floor(count)));
+  for (let i = 0; i < n; i++) {
+    const next = pickNextColor(seated);
+    if (!next) break;
+    seated.push(next);
+  }
+  return seated;
+}
+
 export const COLOR_START: Record<Color, number> = {
   red: 0,
   green: 13,
