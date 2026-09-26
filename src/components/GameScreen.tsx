@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { api } from "../../convex/_generated/api";
 import { Id } from "../../convex/_generated/dataModel";
 import {
-  findCaptureTarget,
+  findCaptureTargets,
   getLegalMoves,
   tryMoveSteps,
 } from "../../convex/lib/ludo";
@@ -276,16 +276,15 @@ export function GameScreen({ data, roomId, clientId }: Props) {
     );
     const dest = mover ? tryMoveSteps(mover.steps, dice) : null;
     if (mover && dest !== null) {
-      const captured = findCaptureTarget(base, me.color, dest);
+      const captures = findCaptureTargets(base, me.color, dest);
+      const capturedKeys = new Set(
+        captures.map((c) => `${c.color}:${c.index}`),
+      );
       const next = base.map((t) => {
         if (t.color === me.color && t.index === tokenIndex) {
           return { ...t, steps: dest };
         }
-        if (
-          captured &&
-          t.color === captured.color &&
-          t.index === captured.index
-        ) {
+        if (capturedKeys.has(`${t.color}:${t.index}`)) {
           return { ...t, steps: -1 };
         }
         return t;

@@ -7,7 +7,7 @@ import {
   MAX_TRACK_STEPS,
   TokenState,
   absoluteTrackPosition,
-  findCaptureTarget,
+  findCaptureTargets,
   getLegalMoves,
   isSafeAbsolute,
   tryMoveSteps,
@@ -133,7 +133,7 @@ export function pickBotMove(
     let score = 0;
 
     // Kill bonus
-    if (findCaptureTarget(tokens, color, dest)) score += 100;
+    if (findCaptureTargets(tokens, color, dest).length > 0) score += 100;
 
     // Goal
     if (dest === FINISHED_STEPS) score += 80;

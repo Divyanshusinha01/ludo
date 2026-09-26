@@ -4,12 +4,11 @@ import {
   canRelease,
   createInitialTokens,
   decideRollOutcome,
-  findCaptureTarget,
+  findCaptureTargets,
   buildFinalRankings,
   gainsExtraTurn,
   getLegalMoves,
   hasWon,
-  isBarrierAbsolute,
   legalIndexesAtSameCell,
   nextColorAmong,
   pickNextColor,
@@ -80,13 +79,15 @@ describe("turn order and seating", () => {
   });
 });
 
-describe("capture and barriers", () => {
+describe("capture", () => {
   it("captures on overlapping non-safe cells", () => {
     const tokens = createInitialTokens();
     tokens[0]!.steps = 5;
     const green = tokens.find((t) => t.color === "green" && t.index === 0)!;
     green.steps = 44;
-    expect(findCaptureTarget(tokens, "red", 5)?.color).toBe("green");
+    expect(findCaptureTargets(tokens, "red", 5).map((t) => t.color)).toEqual([
+      "green",
+    ]);
   });
 
   it("does not capture on safe cells", () => {
@@ -94,25 +95,28 @@ describe("capture and barriers", () => {
     tokens[0]!.steps = 0;
     const green = tokens.find((t) => t.color === "green" && t.index === 0)!;
     green.steps = 39;
-    expect(findCaptureTarget(tokens, "red", 0)).toBeNull();
+    expect(findCaptureTargets(tokens, "red", 0)).toEqual([]);
   });
 
-  it("blocks landing on and capturing barriers", () => {
-    const barrierTokens = createInitialTokens();
-    const g0 = barrierTokens.find((t) => t.color === "green" && t.index === 0)!;
-    const g1 = barrierTokens.find((t) => t.color === "green" && t.index === 1)!;
+  it("captures all stacked tokens on landing (no barrier)", () => {
+    const stacked = createInitialTokens();
+    const g0 = stacked.find((t) => t.color === "green" && t.index === 0)!;
+    const g1 = stacked.find((t) => t.color === "green" && t.index === 1)!;
     g0.steps = 44;
     g1.steps = 44;
     expect(absoluteTrackPosition("green", 44)).toBe(5);
-    expect(isBarrierAbsolute(barrierTokens, 5, "red")).toBe(true);
-    expect(findCaptureTarget(barrierTokens, "red", 5)).toBeNull();
 
-    const red0 = barrierTokens.find((t) => t.color === "red" && t.index === 0)!;
+    const captured = findCaptureTargets(stacked, "red", 5);
+    expect(captured).toHaveLength(2);
+    expect(captured.map((t) => t.index).sort()).toEqual([0, 1]);
+    expect(captured.every((t) => t.color === "green")).toBe(true);
+
+    const red0 = stacked.find((t) => t.color === "red" && t.index === 0)!;
     red0.steps = 0;
-    expect(getLegalMoves(barrierTokens, "red", 5)).not.toContain(0);
+    expect(getLegalMoves(stacked, "red", 5)).toContain(0);
 
-    red0.steps = 3;
-    expect(getLegalMoves(barrierTokens, "red", 3)).toContain(0);
+    red0.steps = 4;
+    expect(getLegalMoves(stacked, "red", 1)).toContain(0);
   });
 
   it("captures a lone opponent", () => {
@@ -120,7 +124,9 @@ describe("capture and barriers", () => {
     lone[0]!.steps = 5;
     const loneGreen = lone.find((t) => t.color === "green" && t.index === 0)!;
     loneGreen.steps = 44;
-    expect(findCaptureTarget(lone, "red", 5)?.color).toBe("green");
+    expect(findCaptureTargets(lone, "red", 5).map((t) => t.color)).toEqual([
+      "green",
+    ]);
   });
 });
 

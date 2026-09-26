@@ -13,7 +13,7 @@ import {
   buildFinalRankings,
   Color,
   decideRollOutcome,
-  findCaptureTarget,
+  findCaptureTargets,
   FINISHED_STEPS,
   gainsExtraTurn,
   getLegalMoves,
@@ -481,8 +481,7 @@ type MoveResult = {
   fromSteps: number;
   toSteps: number;
   extraTurn?: boolean;
-  capturedColor?: string | null;
-  capturedIndex?: number | null;
+  captures: Array<{ color: string; index: number }>;
 };
 
 type RollResult = {
@@ -665,24 +664,35 @@ async function executeMove(
   const dest = tryMoveSteps(tokenDoc.steps, dice);
   if (dest === null) fail(GameError.illegalMove);
 
-  const captured = findCaptureTarget(tokens, player.color, dest);
-  if (captured) {
-    const capList = await ctx.db
-      .query("tokens")
-      .withIndex("by_room_color", (q) =>
-        q.eq("roomId", roomId).eq("color", captured.color),
-      )
-      .collect();
-    const capDoc = capList.find((t) => t.index === captured.index);
-    if (capDoc) {
-      await ctx.db.patch(capDoc._id, { steps: -1 });
+  const captures = findCaptureTargets(tokens, player.color, dest);
+  if (captures.length > 0) {
+    const byColor = new Map<Color, number[]>();
+    for (const c of captures) {
+      const list = byColor.get(c.color) ?? [];
+      list.push(c.index);
+      byColor.set(c.color, list);
     }
-    logEvent("capture", {
-      roomCode: room.code,
-      attacker: player.color,
-      victim: captured.color,
-      clientId: clientIdForLog,
-    });
+    for (const [color, indexes] of byColor) {
+      const capList = await ctx.db
+        .query("tokens")
+        .withIndex("by_room_color", (q) =>
+          q.eq("roomId", roomId).eq("color", color),
+        )
+        .collect();
+      for (const index of indexes) {
+        const capDoc = capList.find((t) => t.index === index);
+        if (capDoc) {
+          await ctx.db.patch(capDoc._id, { steps: -1 });
+        }
+      }
+      logEvent("capture", {
+        roomCode: room.code,
+        attacker: player.color,
+        victim: color,
+        count: indexes.length,
+        clientId: clientIdForLog,
+      });
+    }
   }
 
   await ctx.db.patch(tokenDoc._id, { steps: dest });
@@ -693,15 +703,17 @@ async function executeMove(
     lastActivityAt: now,
   });
 
+  const capturedKeys = new Set(
+    captures.map((c) => `${c.color}:${c.index}`),
+  );
   const updatedTokens = tokens.map((t) =>
     t.color === player.color && t.index === tokenIndex
       ? { ...t, steps: dest }
-      : captured &&
-          t.color === captured.color &&
-          t.index === captured.index
+      : capturedKeys.has(`${t.color}:${t.index}`)
         ? { ...t, steps: -1 }
         : t,
   );
+  const didCapture = captures.length > 0;
 
   const reachedHome = dest === FINISHED_STEPS;
   const leftYard = fromSteps === -1;
@@ -720,7 +732,7 @@ async function executeMove(
     const rankings = await assignFinishRank(ctx, room, player);
     const rank = rankings.indexOf(player.color as Color) + 1;
     const isFirst = rank === 1;
-    const placeNote = captured
+    const placeNote = didCapture
       ? `${player.name} captured and finished — #${rank}!`
       : `${player.name} finished — #${rank}!`;
 
@@ -738,13 +750,17 @@ async function executeMove(
 
     const refreshedRoom = (await ctx.db.get(roomId))!;
     const refreshedPlayers = await seatedPlayers(ctx, roomId);
+    const captureResult = {
+      captured: didCapture,
+      captures: captures.map((c) => ({ color: c.color, index: c.index })),
+    };
 
     if (await maybeFinishAutomaticLoser(ctx, refreshedRoom, refreshedPlayers, now)) {
       return {
         won: true,
         matchOver: true,
         rank,
-        captured: !!captured,
+        ...captureResult,
         reachedHome,
         leftYard,
         fromSteps,
@@ -757,7 +773,7 @@ async function executeMove(
         won: true,
         matchOver: true,
         rank,
-        captured: !!captured,
+        ...captureResult,
         reachedHome,
         leftYard,
         fromSteps,
@@ -772,7 +788,7 @@ async function executeMove(
         won: true,
         matchOver: true,
         rank,
-        captured: !!captured,
+        ...captureResult,
         reachedHome,
         leftYard,
         fromSteps,
@@ -791,7 +807,7 @@ async function executeMove(
       won: true,
       matchOver: false,
       rank,
-      captured: !!captured,
+      ...captureResult,
       reachedHome,
       leftYard,
       fromSteps,
@@ -801,17 +817,21 @@ async function executeMove(
 
   const players = await seatedPlayers(ctx, roomId);
   const seated = playableColors(players);
-  const extraTurn = gainsExtraTurn(dice, !!captured, reachedHome);
-  const capturedPlayer = captured
-    ? players.find((p) => p.color === captured.color)
-    : undefined;
-  const capturedLabel = capturedPlayer?.name ?? captured?.color;
+  const extraTurn = gainsExtraTurn(dice, didCapture, reachedHome);
+  let capturedLabel: string | undefined;
+  if (captures.length === 1) {
+    const only = captures[0]!;
+    const capturedPlayer = players.find((p) => p.color === only.color);
+    capturedLabel = capturedPlayer?.name ?? only.color;
+  } else if (captures.length > 1) {
+    capturedLabel = `${captures.length} tokens`;
+  }
 
   if (extraTurn) {
     const turnId = (room.turnId ?? 0) + 1;
     const reason = reachedHome
       ? `${player.name} reached home — roll again`
-      : captured
+      : didCapture
         ? `${player.name} captured ${capturedLabel} — roll again`
         : `${player.name} rolled 6 — roll again`;
 
@@ -833,7 +853,7 @@ async function executeMove(
     await maybeScheduleBotTurn(ctx, roomId, turnId);
   } else {
     const next = nextColorAmong(room.currentTurn, seated);
-    const moveText = captured
+    const moveText = didCapture
       ? `${player.name} captured ${capturedLabel}`
       : `${player.name} moved`;
     await beginTurn(ctx, room, next, {
@@ -844,14 +864,13 @@ async function executeMove(
 
   return {
     won: false,
-    captured: !!captured,
+    captured: didCapture,
     extraTurn,
     reachedHome,
     leftYard,
     fromSteps,
     toSteps: dest,
-    capturedColor: captured?.color ?? null,
-    capturedIndex: captured?.index ?? null,
+    captures: captures.map((c) => ({ color: c.color, index: c.index })),
   };
 }
 
@@ -865,8 +884,12 @@ const moveResultValidator = v.object({
   fromSteps: v.number(),
   toSteps: v.number(),
   extraTurn: v.optional(v.boolean()),
-  capturedColor: v.optional(v.union(v.string(), v.null())),
-  capturedIndex: v.optional(v.union(v.number(), v.null())),
+  captures: v.array(
+    v.object({
+      color: v.string(),
+      index: v.number(),
+    }),
+  ),
 });
 
 const rollResultValidator = v.object({

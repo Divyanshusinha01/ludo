@@ -178,39 +178,6 @@ export function tryMoveSteps(steps: number, dice: number): number | null {
   return dest;
 }
 
-/** Count tokens on an absolute track cell, grouped by colour. */
-export function countByColorOnAbsolute(
-  tokens: TokenState[],
-  abs: number,
-): Partial<Record<Color, number>> {
-  const counts: Partial<Record<Color, number>> = {};
-  for (const t of tokens) {
-    if (t.steps < 0 || t.steps > MAX_TRACK_STEPS) continue;
-    const otherAbs = absoluteTrackPosition(t.color, t.steps);
-    if (otherAbs !== abs) continue;
-    counts[t.color] = (counts[t.color] ?? 0) + 1;
-  }
-  return counts;
-}
-
-/**
- * Two or more tokens of the same colour on one cell form a barrier:
- * opponents cannot *land* there or capture them. Path-through is allowed
- * (classic family rules — barriers block destination only, not jumps).
- */
-export function isBarrierAbsolute(
-  tokens: TokenState[],
-  abs: number,
-  forMover: Color,
-): boolean {
-  const counts = countByColorOnAbsolute(tokens, abs);
-  for (const color of COLORS) {
-    if (color === forMover) continue;
-    if ((counts[color] ?? 0) >= 2) return true;
-  }
-  return false;
-}
-
 export function getLegalMoves(
   tokens: TokenState[],
   color: Color,
@@ -222,40 +189,34 @@ export function getLegalMoves(
   for (const token of mine) {
     const dest = tryMoveSteps(token.steps, dice);
     if (dest === null) continue;
-
-    // Track landing blocked by an opponent barrier (2+ stacked).
-    if (dest >= 0 && dest <= MAX_TRACK_STEPS) {
-      const abs = absoluteTrackPosition(color, dest);
-      if (abs !== null && isBarrierAbsolute(tokens, abs, color)) continue;
-    }
-
     legal.push(token.index);
   }
 
   return legal;
 }
 
-export function findCaptureTarget(
+/**
+ * Every opposing token on the destination cell (classic rules: stacks are
+ * capturable). Empty on safe cells or when the destination is off-track.
+ */
+export function findCaptureTargets(
   tokens: TokenState[],
   moverColor: Color,
   destSteps: number,
-): TokenState | null {
-  if (destSteps < 0 || destSteps > MAX_TRACK_STEPS) return null;
+): TokenState[] {
+  if (destSteps < 0 || destSteps > MAX_TRACK_STEPS) return [];
   const abs = absoluteTrackPosition(moverColor, destSteps);
-  if (abs === null || isSafeAbsolute(abs)) return null;
-  if (isBarrierAbsolute(tokens, abs, moverColor)) return null;
+  if (abs === null || isSafeAbsolute(abs)) return [];
 
-  const counts = countByColorOnAbsolute(tokens, abs);
+  const captured: TokenState[] = [];
   for (const t of tokens) {
     if (t.color === moverColor) continue;
     if (t.steps < 0 || t.steps > MAX_TRACK_STEPS) continue;
     const otherAbs = absoluteTrackPosition(t.color, t.steps);
     if (otherAbs !== abs) continue;
-    // Only capture a lone token (not part of a barrier stack).
-    if ((counts[t.color] ?? 0) >= 2) continue;
-    return t;
+    captured.push(t);
   }
-  return null;
+  return captured;
 }
 
 export function hasWon(tokens: TokenState[], color: Color): boolean {
