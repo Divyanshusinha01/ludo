@@ -7,6 +7,7 @@ import {
   tryMoveSteps,
 } from "../../convex/lib/ludo";
 import { useOfflineGame } from "@/hooks/useOfflineGame";
+import { useOpponentDiceRoll } from "@/hooks/useOpponentDiceRoll";
 import {
   useTokenAnimation,
   type AnimToken,
@@ -192,6 +193,22 @@ function OfflineGameScreenInner({ onStartNew, game, data }: InnerProps) {
     players.find((p) => p.color === me.color)?.finishRank == null;
   const canRoll =
     myTurn && !diceRolled && !rolling && !animating && !optimisticTokens;
+
+  useOpponentDiceRoll({
+    playing: room.status === "playing",
+    myTurn,
+    turnId: room.turnId,
+    diceRolled: room.diceRolled,
+    diceValue: room.diceValue,
+    rollLock,
+    minSpinMs: ROLL_MIN_SPIN_MS,
+    revealMs: ROLL_REVEAL_MS,
+    setRolling,
+    setReveal,
+  });
+
+  const diceDisplayValue = rolling && !myTurn ? null : diceValue;
+
   const turnLabel = COLOR_LABEL[room.currentTurn as Color];
   const turnPlayer = players.find((p) => p.color === room.currentTurn);
   const botThinking =
@@ -537,7 +554,7 @@ function OfflineGameScreenInner({ onStartNew, game, data }: InnerProps) {
             {myTurn ? "Your dice" : `${turnLabel}'s dice`}
           </span>
           <Dice
-            value={diceValue}
+            value={diceDisplayValue}
             color={room.currentTurn as Color}
             rolling={rolling}
             disabled={!canRoll}
