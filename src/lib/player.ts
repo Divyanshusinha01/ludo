@@ -154,6 +154,10 @@ export function useSessionId(): string {
   return useSyncExternalStore(
     (onStoreChange) => {
       sessionListeners.add(onStoreChange);
+      if (typeof window !== "undefined") {
+        ensureSessionId();
+        queueMicrotask(onStoreChange);
+      }
       return () => {
         sessionListeners.delete(onStoreChange);
       };

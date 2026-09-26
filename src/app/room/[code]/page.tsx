@@ -1,4 +1,4 @@
-import { RoomClient } from "./RoomClient";
+import { RoomShell } from "./RoomShell";
 
 export default async function RoomPage({
   params,
@@ -20,7 +20,7 @@ export default async function RoomPage({
         minHeight: "100dvh",
       }}
     >
-      <RoomClient code={code} roomIdHint={roomIdHint} />
+      <RoomShell code={code} roomIdHint={roomIdHint} />
     </main>
   );
 }

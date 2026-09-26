@@ -194,9 +194,10 @@ function OfflineGameScreenInner({ onStartNew, game, data }: InnerProps) {
   const canRoll =
     myTurn && !diceRolled && !rolling && !animating && !optimisticTokens;
 
-  useOpponentDiceRoll({
+  const { hideOpponentFace } = useOpponentDiceRoll({
     playing: room.status === "playing",
     myTurn,
+    rolling,
     turnId: room.turnId,
     diceRolled: room.diceRolled,
     diceValue: room.diceValue,
@@ -207,7 +208,7 @@ function OfflineGameScreenInner({ onStartNew, game, data }: InnerProps) {
     setReveal,
   });
 
-  const diceDisplayValue = rolling && !myTurn ? null : diceValue;
+  const diceDisplayValue = hideOpponentFace ? null : diceValue;
 
   const turnLabel = COLOR_LABEL[room.currentTurn as Color];
   const turnPlayer = players.find((p) => p.color === room.currentTurn);
@@ -556,7 +557,7 @@ function OfflineGameScreenInner({ onStartNew, game, data }: InnerProps) {
           <Dice
             value={diceDisplayValue}
             color={room.currentTurn as Color}
-            rolling={rolling}
+            rolling={rolling || hideOpponentFace}
             disabled={!canRoll}
             waitingLabel={waitingLabel}
             reveal={reveal}

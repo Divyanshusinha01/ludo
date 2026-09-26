@@ -1,40 +1,18 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
-import { useMutation } from "convex/react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api } from "../../convex/_generated/api";
-import { Button, ErrorText } from "./ui";
-import {
-  formatConvexError,
-  normalizeCode,
-  setPendingJoinName,
-  storeName,
-  useSessionId,
-} from "@/lib/player";
-import {
-  buildTroubleSnapshot,
-  isTroubleshootCoolingDown,
-  runTroubleshoot,
-} from "@/lib/troubleshoot";
+import { Button } from "./ui";
 import { bindAudioUnlock } from "@/lib/sounds";
 import { InstallHint } from "./InstallHint";
+import { HomeOnlineGate } from "./HomeOnlineGate";
+import type { HomeOnlineMode } from "./HomeOnlineFlow";
 import styles from "./HomeScreen.module.css";
 
 export function HomeScreen() {
   const router = useRouter();
-  const createRoom = useMutation(api.rooms.createRoom);
-  const reportTrouble = useMutation(api.trouble.reportTrouble);
-  const [mode, setMode] = useState<"home" | "online" | "create" | "join">(
-    "home",
-  );
-  const [name, setName] = useState("");
-  const [code, setCode] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [troubleBusy, setTroubleBusy] = useState(false);
+  const [mode, setMode] = useState<"home" | HomeOnlineMode>("home");
   const [offline, setOffline] = useState(false);
-  const clientId = useSessionId();
 
   useEffect(() => {
     bindAudioUnlock();
@@ -54,69 +32,27 @@ export function HomeScreen() {
   useEffect(() => {
     if (offline && mode !== "home") {
       setMode("home");
-      setBusy(false);
     }
   }, [offline, mode]);
 
-  async function onTroubleshoot() {
-    if (!clientId || troubleBusy || isTroubleshootCoolingDown()) return;
-    setTroubleBusy(true);
-    const snapshot = buildTroubleSnapshot({
-      clientId,
-      code: code || undefined,
-      screen: "home",
-      lastError: error ?? undefined,
-      offline,
-    });
-    await runTroubleshoot({
-      report: (s) => reportTrouble(s),
-      snapshot,
-      clearLocal: () => {
-        setError(null);
-        setBusy(false);
-      },
-    });
-  }
-  async function onCreate(e: FormEvent) {
-    e.preventDefault();
-    if (!clientId || offline) return;
-    const trimmed = name.trim();
-    if (!trimmed) {
-      setError("Enter your name");
-      return;
+  useEffect(() => {
+    const prefetch = () => {
+      void import("./HomeOnlineGate");
+    };
+    const win = window as Window & {
+      requestIdleCallback?: (
+        cb: IdleRequestCallback,
+        opts?: IdleRequestOptions,
+      ) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    if (win.requestIdleCallback) {
+      const id = win.requestIdleCallback(prefetch, { timeout: 2500 });
+      return () => win.cancelIdleCallback?.(id);
     }
-    setBusy(true);
-    setError(null);
-    try {
-      storeName(trimmed);
-      const res = await createRoom({ clientId, name: trimmed });
-      router.push(`/room/${res.code}?rid=${res.roomId}`);
-    } catch (err) {
-      setError(formatConvexError(err, "Failed to create"));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function onJoin(e: FormEvent) {
-    e.preventDefault();
-    if (!clientId || offline) return;
-    setError(null);
-    const trimmed = name.trim();
-    if (!trimmed) {
-      setError("Enter your name");
-      return;
-    }
-    storeName(trimmed);
-    setPendingJoinName(trimmed);
-    const normalized = normalizeCode(code);
-    if (normalized.length !== 6) {
-      setError("Enter a 6-character room code");
-      return;
-    }
-    // RoomClient owns join — avoids double-join races with Home.
-    router.push(`/room/${normalized}`);
-  }
+    const id = window.setTimeout(prefetch, 1200);
+    return () => window.clearTimeout(id);
+  }, []);
 
   return (
     <div className={styles.shell}>
@@ -134,10 +70,9 @@ export function HomeScreen() {
           <Button
             type="button"
             variant="primary"
-            disabled={busy || offline}
+            disabled={offline}
             onClick={() => {
               if (offline) return;
-              setError(null);
               setMode("online");
             }}
           >
@@ -146,7 +81,6 @@ export function HomeScreen() {
           <Button
             type="button"
             variant="secondary"
-            disabled={busy}
             onClick={() => router.push("/offline")}
           >
             Play Offline
@@ -157,129 +91,14 @@ export function HomeScreen() {
             </p>
           )}
         </div>
-      ) : mode === "online" ? (
-        <div className={styles.actions}>
-          <Button
-            type="button"
-            variant="primary"
-            disabled={busy || offline || !clientId}
-            onClick={() => {
-              if (offline) return;
-              setError(null);
-              setMode("create");
-            }}
-          >
-            Create Game
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            disabled={busy || offline || !clientId}
-            onClick={() => {
-              if (offline) return;
-              setError(null);
-              setMode("join");
-            }}
-          >
-            Join Game
-          </Button>
-          {!clientId && (
-            <p className={styles.hint} role="status">
-              Preparing session…
-            </p>
-          )}
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => setMode("home")}
-          >
-            Back
-          </Button>
-        </div>
-      ) : mode === "create" ? (
-        <form className={styles.actions} onSubmit={onCreate}>
-          <label className={styles.field}>
-            Your name
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              maxLength={20}
-              placeholder="e.g. Divsi"
-              autoComplete="off"
-            />
-          </label>
-          {!clientId && (
-            <p className={styles.hint} role="status">
-              Preparing session…
-            </p>
-          )}
-          <Button
-            type="submit"
-            variant="primary"
-            disabled={busy || offline || !name.trim() || !clientId}
-          >
-            Create game
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => setMode("online")}
-          >
-            Back
-          </Button>
-        </form>
       ) : (
-        <form className={styles.actions} onSubmit={onJoin}>
-          <label className={styles.field}>
-            Your name
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              maxLength={20}
-              placeholder="e.g. Divsi"
-              autoComplete="off"
-            />
-          </label>
-          <label className={styles.field}>
-            Room code
-            <input
-              value={code}
-              onChange={(e) => setCode(normalizeCode(e.target.value))}
-              inputMode="text"
-              autoCapitalize="characters"
-              placeholder="6-character code"
-              maxLength={6}
-              autoComplete="one-time-code"
-            />
-          </label>
-          <Button
-            type="submit"
-            variant="primary"
-            disabled={
-              busy || offline || !name.trim() || code.length !== 6 || !clientId
-            }
-          >
-            Join room
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => setMode("online")}
-          >
-            Back
-          </Button>
-        </form>
+        <HomeOnlineGate
+          mode={mode}
+          offline={offline}
+          onModeChange={setMode}
+        />
       )}
 
-      <ErrorText
-        onTroubleshoot={
-          clientId ? () => void onTroubleshoot() : undefined
-        }
-        troubleBusy={troubleBusy}
-        troubleDisabled={isTroubleshootCoolingDown()}
-      >
-        {error}
-      </ErrorText>
       <InstallHint />
     </div>
   );

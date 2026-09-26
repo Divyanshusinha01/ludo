@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { playSound } from "@/lib/sounds";
 
 type DiceSnap = {
@@ -22,9 +22,7 @@ export function shouldAnimateRemoteRoll(prev: DiceSnap, next: DiceSnap): boolean
     !next.diceRolled &&
     next.diceValue !== null;
   const faceChangedWhilePending =
-    !next.diceRolled &&
-    prev.diceValue !== next.diceValue &&
-    prev.diceValue !== null;
+    !next.diceRolled && prev.diceValue !== next.diceValue;
 
   return becameRolled || rollAgain || faceChangedWhilePending;
 }
@@ -43,6 +41,7 @@ function clearTimer(ref: React.MutableRefObject<ReturnType<typeof setTimeout> | 
 export function useOpponentDiceRoll(options: {
   playing: boolean;
   myTurn: boolean;
+  rolling: boolean;
   turnId: number;
   diceRolled: boolean;
   diceValue: number | null;
@@ -51,10 +50,11 @@ export function useOpponentDiceRoll(options: {
   revealMs: number;
   setRolling: (rolling: boolean) => void;
   setReveal: (reveal: boolean) => void;
-}) {
+}): { hideOpponentFace: boolean } {
   const {
     playing,
     myTurn,
+    rolling,
     turnId,
     diceRolled,
     diceValue,
@@ -71,6 +71,18 @@ export function useOpponentDiceRoll(options: {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const snap: DiceSnap = { turnId, diceRolled, diceValue };
+  const prevSnap = prevRef.current;
+
+  const pendingRemoteRoll =
+    playing &&
+    !myTurn &&
+    !rollLock.current &&
+    prevSnap !== null &&
+    shouldAnimateRemoteRoll(prevSnap, snap);
+
+  const hideOpponentFace = !myTurn && (rolling || pendingRemoteRoll);
+
   useEffect(() => {
     return () => {
       clearTimer(timerRef);
@@ -78,7 +90,7 @@ export function useOpponentDiceRoll(options: {
     };
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     function finishRemoteSpin() {
       clearTimer(timerRef);
       remoteSpinRef.current = false;
@@ -114,13 +126,13 @@ export function useOpponentDiceRoll(options: {
       }, wait);
     }
 
-    const next: DiceSnap = { turnId, diceRolled, diceValue };
+    const next = snap;
 
     if (!playing) {
-      prevRef.current = next;
       if (remoteSpinRef.current) {
         cancelRemoteSpin();
       }
+      prevRef.current = next;
       return;
     }
 
@@ -129,23 +141,22 @@ export function useOpponentDiceRoll(options: {
     }
 
     const prev = prevRef.current;
+
+    if (prev && !myTurn && !rollLock.current && shouldAnimateRemoteRoll(prev, next)) {
+      clearTimer(revealTimerRef);
+      setReveal(false);
+
+      spinUntilRef.current = Math.max(
+        spinUntilRef.current,
+        Date.now() + minSpinMs,
+      );
+      remoteSpinRef.current = true;
+      setRolling(true);
+      playSound("roll");
+      scheduleSpinFinish();
+    }
+
     prevRef.current = next;
-
-    if (!prev || myTurn || rollLock.current) return;
-
-    if (!shouldAnimateRemoteRoll(prev, next)) return;
-
-    clearTimer(revealTimerRef);
-    setReveal(false);
-
-    spinUntilRef.current = Math.max(
-      spinUntilRef.current,
-      Date.now() + minSpinMs,
-    );
-    remoteSpinRef.current = true;
-    setRolling(true);
-    playSound("roll");
-    scheduleSpinFinish();
   }, [
     playing,
     myTurn,
@@ -158,4 +169,6 @@ export function useOpponentDiceRoll(options: {
     setRolling,
     setReveal,
   ]);
+
+  return { hideOpponentFace };
 }

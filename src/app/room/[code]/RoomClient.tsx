@@ -1,15 +1,29 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
-import { Lobby } from "@/components/Lobby";
-import { GameScreen } from "@/components/GameScreen";
-import { ChatPanel } from "@/components/ChatPanel";
-import { VoicePanel } from "@/components/VoicePanel";
 import { Button, ErrorText, StatusText } from "@/components/ui";
+
+const Lobby = dynamic(
+  () => import("@/components/Lobby").then((m) => m.Lobby),
+  { loading: () => <StatusText>Loading lobby…</StatusText> },
+);
+const GameScreen = dynamic(
+  () => import("@/components/GameScreen").then((m) => m.GameScreen),
+  { loading: () => <StatusText>Loading game…</StatusText> },
+);
+const ChatPanel = dynamic(
+  () => import("@/components/ChatPanel").then((m) => m.ChatPanel),
+  { ssr: false },
+);
+const VoicePanel = dynamic(
+  () => import("@/components/VoicePanel").then((m) => m.VoicePanel),
+  { ssr: false },
+);
 import {
   formatConvexError,
   normalizeCode,
@@ -199,8 +213,12 @@ export function RoomClient({
     });
   }
 
-  if (!clientId || (roomCode.length === 6 && roomLoading)) {
+  if (roomCode.length === 6 && roomLoading && clientId) {
     return <StatusText>Connecting…</StatusText>;
+  }
+
+  if (!clientId) {
+    return <StatusText>Starting session…</StatusText>;
   }
 
   if (roomCode.length !== 6 || roomMissing) {

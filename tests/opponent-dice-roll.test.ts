@@ -28,4 +28,13 @@ describe("opponent dice roll animation triggers", () => {
       ),
     ).toBe(false);
   });
+
+  it("animates when the face appears before diceRolled is set", () => {
+    expect(
+      shouldAnimateRemoteRoll(
+        { turnId: 3, diceRolled: false, diceValue: null },
+        { turnId: 3, diceRolled: false, diceValue: 4 },
+      ),
+    ).toBe(true);
+  });
 });
