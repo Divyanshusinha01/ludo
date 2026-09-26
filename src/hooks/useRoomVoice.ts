@@ -384,18 +384,22 @@ export function useRoomVoice(
     }
   }, [closeAllPeers, leaveVoice, roomId, clientId]);
 
-  const enable = useCallback(async () => {
+  const enable = useCallback(async (startUnmuted = false) => {
+    if (enabledRef.current) return;
     setError(null);
-    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+    if (
+      typeof navigator === "undefined" ||
+      !navigator.mediaDevices?.getUserMedia
+    ) {
       setError("Voice needs a secure browser (HTTPS) with mic support");
       return;
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       localStreamRef.current = stream;
-      // Join muted — tap the speaker to unmute and talk.
-      setMuted(true);
-      applyMicEnabled(stream, true);
+      const mutedNow = !startUnmuted;
+      setMuted(mutedNow);
+      applyMicEnabled(stream, mutedNow);
       enabledRef.current = true;
       setNow(Date.now());
       setEnabled(true);
@@ -412,11 +416,6 @@ export function useRoomVoice(
     }
   }, [joinVoice, roomId, clientId]);
 
-  const disable = useCallback(async () => {
-    setEnabled(false);
-    await teardown();
-  }, [teardown]);
-
   // Unmount cleanup.
   useEffect(() => {
     return () => {
@@ -429,8 +428,13 @@ export function useRoomVoice(
   }, []);
 
   const toggleMute = useCallback(() => {
+    if (!enabledRef.current) return;
     setMuted((m) => !m);
   }, []);
+
+  const enableAndUnmute = useCallback(async () => {
+    await enable(true);
+  }, [enable]);
 
   return {
     enabled,
@@ -438,8 +442,7 @@ export function useRoomVoice(
     error,
     peerStatus,
     remoteStreams,
-    enable,
-    disable,
+    enableAndUnmute,
     toggleMute,
   };
 }

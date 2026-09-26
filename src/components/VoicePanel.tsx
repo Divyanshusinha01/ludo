@@ -29,70 +29,61 @@ export function VoicePanel({ roomId, clientId, myColor, players }: Props) {
     players.map((p) => [p.color, p.name]),
   ) as Partial<Record<Color, string>>;
 
+  const showMuted = !voice.enabled || voice.muted;
+
+  const onMicClick = () => {
+    if (!voice.enabled) {
+      void voice.enableAndUnmute();
+      return;
+    }
+    voice.toggleMute();
+  };
+
   return (
     <div className={styles.root}>
-      {!voice.enabled ? (
+      <div className={styles.panel} aria-label="Voice chat">
         <button
           type="button"
-          className={styles.toggle}
-          onClick={() => void voice.enable()}
+          className={`${styles.micBtn} ${
+            showMuted ? styles.micMuted : styles.micLive
+          }`}
+          onClick={onMicClick}
+          aria-pressed={!showMuted}
+          aria-label={showMuted ? "Unmute microphone" : "Mute microphone"}
+          title={showMuted ? "Unmute to speak" : "Mute"}
         >
-          Join voice
+          {showMuted ? <MicOffIcon /> : <MicOnIcon />}
         </button>
-      ) : (
-        <div className={styles.panel} aria-label="Voice chat">
-          <div className={styles.row}>
-            <button
-              type="button"
-              className={styles.toggle}
-              onClick={() => void voice.disable()}
-            >
-              Leave voice
-            </button>
-            <button
-              type="button"
-              className={`${styles.micBtn} ${
-                voice.muted ? styles.micMuted : styles.micLive
-              }`}
-              onClick={voice.toggleMute}
-              aria-pressed={voice.muted}
-              aria-label={voice.muted ? "Unmute microphone" : "Mute microphone"}
-              title={voice.muted ? "Unmute to speak" : "Mute"}
-            >
-              {voice.muted ? <MicOffIcon /> : <MicOnIcon />}
-            </button>
-          </div>
 
-          {peerColors.length > 0 && (
-            <ul className={styles.peers} aria-label="Voice peers">
-              {peerColors.map((color) => (
-                <li
-                  key={color}
-                  className={styles.peer}
-                  title={`${nameByColor[color] ?? color}: ${voice.peerStatus[color]}`}
-                >
-                  <span
-                    className={`${styles.dot} ${
-                      voice.peerStatus[color] === "connected"
-                        ? styles.dotLive
-                        : styles.dotWait
-                    }`}
-                    style={
-                      {
-                        ["--c" as string]: COLOR_HEX[color],
-                      } as CSSProperties
-                    }
-                    aria-hidden
-                  />
-                  <span className={styles.peerName}>
-                    {nameByColor[color] ?? color}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
+        {peerColors.length > 0 && (
+          <ul className={styles.peers} aria-label="Voice peers">
+            {peerColors.map((color) => (
+              <li
+                key={color}
+                className={styles.peer}
+                title={`${nameByColor[color] ?? color}: ${voice.peerStatus[color]}`}
+              >
+                <span
+                  className={`${styles.dot} ${
+                    voice.peerStatus[color] === "connected"
+                      ? styles.dotLive
+                      : styles.dotWait
+                  }`}
+                  style={
+                    {
+                      ["--c" as string]: COLOR_HEX[color],
+                    } as CSSProperties
+                  }
+                  aria-hidden
+                />
+                <span className={styles.peerName}>
+                  {nameByColor[color] ?? color}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
 
       <ErrorText>{voice.error}</ErrorText>
 
