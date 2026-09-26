@@ -136,10 +136,29 @@ export function getOrCreateClientId(): string {
   return cachedId;
 }
 
+const sessionListeners = new Set<() => void>();
+let sessionReady = false;
+
+function ensureSessionId(): string {
+  const id = getOrCreateClientId();
+  if (!sessionReady && typeof window !== "undefined") {
+    sessionReady = true;
+    queueMicrotask(() => {
+      for (const listener of sessionListeners) listener();
+    });
+  }
+  return id;
+}
+
 export function useSessionId(): string {
   return useSyncExternalStore(
-    () => () => {},
-    () => getOrCreateClientId(),
+    (onStoreChange) => {
+      sessionListeners.add(onStoreChange);
+      return () => {
+        sessionListeners.delete(onStoreChange);
+      };
+    },
+    () => ensureSessionId(),
     () => "",
   );
 }

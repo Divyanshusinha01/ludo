@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { OfflineGameScreen } from "@/components/OfflineGameScreen";
 import { OfflineSetup } from "@/components/OfflineSetup";
@@ -14,7 +14,11 @@ import {
 import { Button } from "@/components/ui";
 import styles from "@/components/HomeScreen.module.css";
 
-type Mode = "resume" | "setup" | "game";
+type Mode = "prompt" | "setup" | "game";
+
+function readHasSavedGame(): boolean {
+  return loadOfflineGame() !== null;
+}
 
 export function OfflineClient() {
   const router = useRouter();
@@ -23,13 +27,18 @@ export function OfflineClient() {
     loadOfflineGame,
     () => null,
   );
-  const savedOnMount = useState(() =>
-    typeof window !== "undefined" ? !!loadOfflineGame() : false,
-  )[0];
-  const [mode, setMode] = useState<Mode>(() => {
-    if (savedOnMount) return "resume";
-    return "setup";
-  });
+  const hasSavedGame = useSyncExternalStore(
+    subscribeOfflineGame,
+    readHasSavedGame,
+    () => false,
+  );
+  const [mode, setMode] = useState<Mode>("setup");
+
+  useEffect(() => {
+    if (hasSavedGame) {
+      setMode((current) => (current === "setup" ? "prompt" : current));
+    }
+  }, [hasSavedGame]);
 
   const startGame = useCallback((initial: OfflineGameState) => {
     saveOfflineGame(initial);
@@ -48,7 +57,7 @@ export function OfflineClient() {
     setMode("game");
   }, []);
 
-  if (mode === "resume" && savedOnMount) {
+  if (mode === "prompt" && hasSavedGame) {
     return (
       <div className={styles.shell}>
         <div className={styles.hero}>
