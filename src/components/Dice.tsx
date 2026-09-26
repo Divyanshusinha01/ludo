@@ -33,12 +33,20 @@ export function Dice({
   const [spinFace, setSpinFace] = useState<number | null>(null);
 
   useEffect(() => {
-    if (!rolling) return;
-    let n = 0;
+    if (!rolling) {
+      setSpinFace(null);
+      return;
+    }
+    // Start immediately so the "Roll" hint doesn't linger for a frame.
+    let last = 1 + Math.floor(Math.random() * 6);
+    setSpinFace(last);
     const id = setInterval(() => {
-      n += 1;
-      setSpinFace(1 + (n % 6));
-    }, 50);
+      let next = 1 + Math.floor(Math.random() * 6);
+      // Avoid repeating the same face so the spin reads as motion.
+      if (next === last) next = (next % 6) + 1;
+      last = next;
+      setSpinFace(next);
+    }, 40);
     return () => clearInterval(id);
   }, [rolling]);
 
@@ -56,7 +64,7 @@ export function Dice({
   return (
     <button
       type="button"
-      className={`${styles.dice} ${rolling ? styles.rolling : ""} ${reveal && !rolling && value ? styles.reveal : ""} ${!disabled ? styles.ready : ""}`}
+      className={`${styles.dice} ${rolling ? styles.rolling : ""} ${reveal && !rolling && value ? styles.reveal : ""} ${!disabled && !rolling ? styles.ready : ""}`}
       onClick={onRoll}
       disabled={disabled}
       aria-label={label}

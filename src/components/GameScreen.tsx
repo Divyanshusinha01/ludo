@@ -48,10 +48,10 @@ type LocalDice = {
   turnId: number;
 };
 
-const ROLL_MIN_SPIN_MS = 280;
-const ROLL_REVEAL_MS = 450;
+const ROLL_MIN_SPIN_MS = 220;
+const ROLL_REVEAL_MS = 320;
 /** Brief pause after dice reveal before a server auto-move animates. */
-const AUTO_MOVE_DELAY_MS = 380;
+const AUTO_MOVE_DELAY_MS = 260;
 
 function tokenSig(tokens: AnimToken[]) {
   return tokens
