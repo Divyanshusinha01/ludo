@@ -212,6 +212,37 @@ export function shouldTransferRollToTeammate(
   return legalMovesForDelegatedRoll(tokens, teammateColor, dice).length > 0;
 }
 
+/**
+ * 2v2 seat holder rolled but cannot move — hand the die to a live teammate
+ * when they can use it on their own tokens.
+ */
+export function shouldKeepRollForTeammatePass(
+  mode: GameMode | undefined,
+  seatColor: Color,
+  dice: number,
+  tokens: TokenState[],
+  players: TeamPlayerLike[],
+): boolean {
+  if (mode !== "2v2") return false;
+  const teammateColor = teamTeammateColor(seatColor);
+  const teammate = players.find((p) => p.color === teammateColor);
+  if (
+    !teammate ||
+    teammate.eliminated ||
+    teammate.finishRank != null
+  ) {
+    return false;
+  }
+  return shouldTransferRollToTeammate(
+    { diceRolled: true, diceValue: dice },
+    seatColor,
+    teammateColor,
+    tokens,
+    players,
+    mode,
+  );
+}
+
 export function getLegalMovesForActor(
   tokens: TokenState[],
   actorColor: Color,

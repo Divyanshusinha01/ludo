@@ -29,6 +29,7 @@ import {
   shouldAssignAutomaticLoser,
   snapshotTokens,
   GameMode,
+  shouldKeepRollForTeammatePass,
   shouldTransferRollToTeammate,
   startsSixStreak,
   TokenMoveChoice,
@@ -687,7 +688,35 @@ async function executeRoll(
   }
 
   if (decision.kind === "no_moves") {
-    const next = advanceTurnColor(room.currentTurn as Color, players, mode);
+    const seatColor = room.currentTurn as Color;
+    if (
+      player.color === seatColor &&
+      shouldKeepRollForTeammatePass(mode, seatColor, value, tokens, players)
+    ) {
+      await ctx.db.patch(roomId, {
+        diceValue: value,
+        diceRolled: true,
+        consecutiveSixes: 0,
+        lastActivityAt: now,
+      });
+      const fresh = (await ctx.db.get(roomId))!;
+      const passed = await passRollToTeammateIfLegal(
+        ctx,
+        fresh,
+        player,
+        now,
+      );
+      if (passed) {
+        const afterPass = (await ctx.db.get(roomId))!;
+        await maybeScheduleBotTurn(
+          ctx,
+          roomId,
+          afterPass.turnId ?? room.turnId ?? 0,
+        );
+        return { value, skipped: false, legalMoves, legalTokenMoves };
+      }
+    }
+    const next = advanceTurnColor(seatColor, players, mode);
     await beginTurn(ctx, room, next, {
       diceValue: value,
       lastEvent: `${player.name} rolled ${value} — no moves`,
@@ -1181,6 +1210,66 @@ export const moveToken = mutation({
   },
 });
 
+/** Delegate a pending rolled die to a live teammate (2v2). Returns false if illegal. */
+async function passRollToTeammateIfLegal(
+  ctx: MutationCtx,
+  room: Doc<"rooms">,
+  passer: Doc<"players">,
+  now: number,
+): Promise<boolean> {
+  if (modeFromRoom(room) !== "2v2") return false;
+  if (passer.color !== (room.currentTurn as Color)) return false;
+  if ((room.passedRollTo ?? null) != null) return false;
+  if (!room.diceRolled || room.diceValue === null) return false;
+
+  const teammateColor = teamTeammateColor(passer.color as Color);
+  const playersAfter = await seatedPlayers(ctx, room._id);
+  const teammate = playersAfter.find((p) => p.color === teammateColor);
+  if (
+    !teammate ||
+    teammate.eliminated ||
+    teammate.finishRank != null
+  ) {
+    return false;
+  }
+
+  const mode = modeFromRoom(room);
+  const tokens = await loadTokens(ctx, room._id);
+  if (
+    !shouldTransferRollToTeammate(
+      room,
+      passer.color as Color,
+      teammateColor,
+      tokens,
+      playersAfter,
+      mode,
+    )
+  ) {
+    return false;
+  }
+
+  const dice = room.diceValue;
+  const turnId = (room.turnId ?? 0) + 1;
+  const passEvent = `${passer.name} passed a ${dice} to ${teammate.name}`;
+  const delegateText = `${teammate.name} — use ${passer.name}'s ${dice}`;
+  const { lastEvent, events } = withEvents(
+    room,
+    [passEvent, delegateText],
+    now,
+  );
+  await ctx.db.patch(room._id, {
+    passedRollTo: teammateColor,
+    turnId,
+    turnStartedAt: now,
+    lastActivityAt: now,
+    lastEvent,
+    events,
+  });
+  await scheduleTurnTimeout(ctx, room._id, turnId);
+  await maybeScheduleBotTurn(ctx, room._id, turnId);
+  return true;
+}
+
 export const passTurn = mutation({
   args: {
     roomId: v.id("rooms"),
@@ -1212,51 +1301,11 @@ export const passTurn = mutation({
     const teammateColor = teamTeammateColor(player.color as Color);
     if (args.targetColor !== teammateColor) fail(GameError.invalidPassTarget);
 
-    const playersAfter = await seatedPlayers(ctx, args.roomId);
-    const teammate = playersAfter.find((p) => p.color === teammateColor);
-    if (
-      !teammate ||
-      teammate.eliminated ||
-      teammate.finishRank != null
-    ) {
-      fail(GameError.invalidPassTarget);
-    }
-
     const now = assertActionInterval(player.lastActionAt, ACTION_MIN_INTERVAL_MS);
     await ctx.db.patch(player._id, { lastActionAt: now });
 
-    const mode = modeFromRoom(fresh);
-    const tokens = await loadTokens(ctx, args.roomId);
-    const transferRoll = shouldTransferRollToTeammate(
-      fresh,
-      player.color as Color,
-      teammateColor,
-      tokens,
-      playersAfter,
-      mode,
-    );
-
-    if (!transferRoll) fail(GameError.passNothingToPass);
-
-    const dice = fresh.diceValue!;
-    const turnId = (fresh.turnId ?? 0) + 1;
-    const passEvent = `${player.name} passed a ${dice} to ${teammate.name}`;
-    const delegateText = `${teammate.name} — use ${player.name}'s ${dice}`;
-    const { lastEvent, events } = withEvents(
-      fresh,
-      [passEvent, delegateText],
-      now,
-    );
-    await ctx.db.patch(fresh._id, {
-      passedRollTo: teammateColor,
-      turnId,
-      turnStartedAt: now,
-      lastActivityAt: now,
-      lastEvent,
-      events,
-    });
-    await scheduleTurnTimeout(ctx, fresh._id, turnId);
-    await maybeScheduleBotTurn(ctx, fresh._id, turnId);
+    const passed = await passRollToTeammateIfLegal(ctx, fresh, player, now);
+    if (!passed) fail(GameError.passNothingToPass);
     return null;
   },
 });
@@ -1363,6 +1412,19 @@ export const playBotTurn = internalMutation({
             dice,
           );
     if (legal.length === 0) {
+      const passed = await passRollToTeammateIfLegal(ctx, room, player, now);
+      if (passed) {
+        const fresh = await ctx.db.get(args.roomId);
+        if (fresh && fresh.status === "playing") {
+          await maybeScheduleBotTurn(
+            ctx,
+            args.roomId,
+            fresh.turnId ?? args.turnId,
+            BOT_THINK_MS,
+          );
+        }
+        return null;
+      }
       const next = advanceTurnColor(room.currentTurn as Color, players, mode);
       await beginTurn(ctx, room, next, {
         lastEvent: `${player.name} — no moves`,

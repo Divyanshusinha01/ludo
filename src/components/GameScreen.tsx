@@ -11,6 +11,7 @@ import {
   legalMovesForDelegatedRoll,
   moveControllerColor,
   rollControllerColor,
+  shouldKeepRollForTeammatePass,
   teamTeammateColor,
   tryMoveSteps,
   turnActorColor,
@@ -313,13 +314,37 @@ export function GameScreen({ data, roomId, clientId }: Props) {
     !animating &&
     !optimisticTokens &&
     !rolling;
-  const passTargetColor =
-    canPass &&
-    teammatePlayer &&
-    !teammatePlayer.eliminated &&
-    teammatePlayer.finishRank == null
+  const passTargetColor = useMemo((): Color | null => {
+    if (
+      !canPass ||
+      !teammatePlayer ||
+      teammatePlayer.eliminated ||
+      teammatePlayer.finishRank != null ||
+      !teammateColor ||
+      diceValue === null
+    ) {
+      return null;
+    }
+    const tokens = optimisticTokens ?? serverTokens;
+    return shouldKeepRollForTeammatePass(
+      "2v2",
+      turnSeat,
+      diceValue,
+      tokens,
+      roster,
+    )
       ? teammateColor
       : null;
+  }, [
+    canPass,
+    teammatePlayer,
+    teammateColor,
+    diceValue,
+    optimisticTokens,
+    serverTokens,
+    turnSeat,
+    roster,
+  ]);
 
   const { hideOpponentFace } = useOpponentDiceRoll({
     playing: room.status === "playing",
@@ -984,7 +1009,9 @@ export function GameScreen({ data, roomId, clientId }: Props) {
           )}
         {passTargetColor && teammatePlayer && diceValue != null && !animating && (
           <p className={styles.prompt}>
-            Or tap {teammatePlayer.name}&apos;s home to pass your {diceValue}
+            {selectableTokens.length === 0
+              ? `Tap ${teammatePlayer.name}'s home to pass your ${diceValue}`
+              : `Or tap ${teammatePlayer.name}'s home to pass your ${diceValue}`}
           </p>
         )}
         {!myTurn && room.status === "playing" && !turnAway && (

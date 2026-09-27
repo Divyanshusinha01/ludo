@@ -7,6 +7,7 @@ import {
   FINISHED_STEPS,
   getLegalMovesForActor,
   nextTurnSeatColor,
+  shouldKeepRollForTeammatePass,
   shouldTransferRollToTeammate,
   legalMovesForDelegatedRoll,
   pickNextColorForTeam,
@@ -186,6 +187,42 @@ describe("2v2 pass roll transfer", () => {
         tokens,
         roster,
         "2v2",
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps a no-move roll when the live teammate can use it", () => {
+    const tokens = createInitialTokens();
+    tokens.find((t) => t.color === "yellow" && t.index === 0)!.steps = 10;
+    expect(
+      shouldKeepRollForTeammatePass("2v2", "red", 4, tokens, roster),
+    ).toBe(true);
+    expect(
+      shouldKeepRollForTeammatePass("1v1", "red", 4, tokens, roster),
+    ).toBe(false);
+  });
+
+  it("does not keep a no-move roll when nobody on the team can use it", () => {
+    const tokens = createInitialTokens();
+    tokens.find((t) => t.color === "red" && t.index === 0)!.steps = 10;
+    expect(
+      shouldKeepRollForTeammatePass("2v2", "red", 3, tokens, roster),
+    ).toBe(false);
+  });
+
+  it("does not keep a no-move roll when the teammate is already finished", () => {
+    const tokens = createInitialTokens();
+    tokens.find((t) => t.color === "yellow" && t.index === 0)!.steps = 10;
+    const rosterYellowFinished = roster.map((p) =>
+      p.color === "yellow" ? { ...p, finishRank: 1 } : p,
+    );
+    expect(
+      shouldKeepRollForTeammatePass(
+        "2v2",
+        "red",
+        4,
+        tokens,
+        rosterYellowFinished,
       ),
     ).toBe(false);
   });
