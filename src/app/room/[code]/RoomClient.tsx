@@ -28,9 +28,9 @@ import {
   COLOR_HEX,
   formatConvexError,
   normalizeCode,
-  peekPendingJoinName,
   storeName,
   takePendingJoinName,
+  usePendingJoinName,
   useSessionId,
 } from "@/lib/player";
 import {
@@ -55,7 +55,7 @@ export function RoomClient({
   const clientId = useSessionId();
   const [joinError, setJoinError] = useState<string | null>(null);
   const [name, setName] = useState("");
-  const [nameFromHome] = useState(() => peekPendingJoinName());
+  const pendingJoinName = usePendingJoinName();
   const [joining, setJoining] = useState(false);
   const [joinTeam, setJoinTeam] = useState<"A" | "B" | null>(null);
   const [offline, setOffline] = useState(false);
@@ -172,7 +172,7 @@ export function RoomClient({
   async function onJoin(e: FormEvent) {
     e.preventDefault();
     if (!clientId || joining) return;
-    const trimmed = (nameFromHome || name).trim();
+    const trimmed = (pendingJoinName || name).trim();
     if (!trimmed) {
       setJoinError("Enter your name");
       return;
@@ -181,7 +181,7 @@ export function RoomClient({
     setJoinError(null);
     try {
       storeName(trimmed);
-      if (nameFromHome) takePendingJoinName();
+      if (pendingJoinName) takePendingJoinName();
       const result = await joinRoom({
         code: roomCode,
         clientId,
@@ -282,14 +282,14 @@ export function RoomClient({
       data?.players.filter((p) => p.team === "A").length ?? 0;
     const teamBCount =
       data?.players.filter((p) => p.team === "B").length ?? 0;
-    const joinNameReady = !!(nameFromHome || name.trim());
+    const joinNameReady = !!(pendingJoinName || name.trim());
     return (
       <div className={styles.center}>
         <h1>{midGame ? `Rejoin room ${roomCode}` : `Join room ${roomCode}`}</h1>
         <p>
           {midGame
             ? "Game already in progress — enter the same name you used before to request a rejoin."
-            : teamMode && nameFromHome
+            : teamMode && pendingJoinName
               ? "Choose your team — your name is already set from home."
               : teamMode
                 ? "Pick a team and enter your name."
@@ -359,9 +359,9 @@ export function RoomClient({
               </div>
             </fieldset>
           )}
-          {nameFromHome && !midGame ? (
+          {pendingJoinName && !midGame ? (
             <p className={styles.joinAsName}>
-              Joining as <strong>{nameFromHome}</strong>
+              Joining as <strong>{pendingJoinName}</strong>
             </p>
           ) : (
             <label className={styles.field}>

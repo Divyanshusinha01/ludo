@@ -211,6 +211,15 @@ export function peekPendingJoinName(): string {
   return readPendingJoinName();
 }
 
+/** Pending join name from home — safe with SSR (re-reads sessionStorage on the client). */
+export function usePendingJoinName(): string {
+  return useSyncExternalStore(
+    () => () => {},
+    () => peekPendingJoinName(),
+    () => "",
+  );
+}
+
 export function takePendingJoinName(): string {
   if (typeof window === "undefined") return "";
   try {
