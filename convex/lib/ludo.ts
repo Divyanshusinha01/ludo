@@ -140,6 +140,39 @@ export function nextTurnSeatColor(
 
 export type TokenMoveChoice = { color: Color; index: number };
 
+/**
+ * In 2v2, passing can hand off a pending roll (not only skip before rolling).
+ * True when the actor still has an unconsumed roll to give their teammate.
+ */
+export function shouldTransferRollToTeammate(
+  room: { diceRolled: boolean; diceValue: number | null },
+  actorColor: Color,
+  teammateColor: Color,
+  tokens: TokenState[],
+  players: TeamPlayerLike[],
+  mode: GameMode | undefined,
+): boolean {
+  const dice = room.diceValue;
+  if (dice === null) return false;
+  if (room.diceRolled) return true;
+  if (mode !== "2v2" || dice !== 6) return false;
+  const actorLegal = getLegalMovesForActor(
+    tokens,
+    actorColor,
+    players,
+    mode,
+    dice,
+  );
+  const mateLegal = getLegalMovesForActor(
+    tokens,
+    teammateColor,
+    players,
+    mode,
+    dice,
+  );
+  return actorLegal.length === 0 && mateLegal.length > 0;
+}
+
 export function getLegalMovesForActor(
   tokens: TokenState[],
   actorColor: Color,

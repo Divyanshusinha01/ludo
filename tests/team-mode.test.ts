@@ -7,6 +7,7 @@ import {
   FINISHED_STEPS,
   getLegalMovesForActor,
   nextTurnSeatColor,
+  shouldTransferRollToTeammate,
   pickNextColorForTeam,
   rotationColors,
   teamAllTokensHome,
@@ -118,6 +119,61 @@ describe("2v2 finished-player turns", () => {
     tokens.find((t) => t.color === "red" && t.index === 0)!.steps = 10;
     const moves = getLegalMovesForActor(tokens, "yellow", roster, "2v2", 6);
     expect(moves.some((m) => m.color === "red")).toBe(true);
+  });
+});
+
+describe("2v2 pass roll transfer", () => {
+  const roster = [
+    { color: "red" as const, team: "A" as const, eliminated: false, finishRank: null },
+    { color: "yellow" as const, team: "A" as const, eliminated: false, finishRank: null },
+    { color: "green" as const, team: "B" as const, eliminated: false, finishRank: null },
+    { color: "blue" as const, team: "B" as const, eliminated: false, finishRank: null },
+  ];
+
+  it("transfers any pending rolled face (not only 6)", () => {
+    const tokens = createInitialTokens();
+    tokens.find((t) => t.color === "red" && t.index === 0)!.steps = 10;
+    expect(
+      shouldTransferRollToTeammate(
+        { diceRolled: true, diceValue: 4 },
+        "red",
+        "yellow",
+        tokens,
+        roster,
+        "2v2",
+      ),
+    ).toBe(true);
+  });
+
+  it("transfers a 6 when only the teammate can use it", () => {
+    const tokens = createInitialTokens();
+    for (const t of tokens) {
+      if (t.color === "red") t.steps = FINISHED_STEPS - 1;
+    }
+    expect(
+      shouldTransferRollToTeammate(
+        { diceRolled: false, diceValue: 6 },
+        "red",
+        "yellow",
+        tokens,
+        roster,
+        "2v2",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not transfer when there is no roll to give", () => {
+    const tokens = createInitialTokens();
+    expect(
+      shouldTransferRollToTeammate(
+        { diceRolled: false, diceValue: null },
+        "red",
+        "yellow",
+        tokens,
+        roster,
+        "2v2",
+      ),
+    ).toBe(false);
   });
 });
 

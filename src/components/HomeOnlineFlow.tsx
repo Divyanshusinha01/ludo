@@ -142,26 +142,28 @@ export function HomeOnlineFlow({ mode, offline, onModeChange }: Props) {
         </div>
       ) : mode === "create" ? (
         <form className={styles.actions} onSubmit={onCreate}>
-          <fieldset className={styles.field}>
+          <fieldset className={styles.fieldGroup}>
             <legend>Game mode</legend>
-            <label>
-              <input
-                type="radio"
-                name="gameMode"
-                checked={gameMode === "1v1"}
-                onChange={() => setGameMode("1v1")}
-              />
-              1v1
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="gameMode"
-                checked={gameMode === "2v2"}
-                onChange={() => setGameMode("2v2")}
-              />
-              2v2 Team
-            </label>
+            <div className={styles.optionList} role="radiogroup" aria-label="Game mode">
+              <label className={styles.option}>
+                <input
+                  type="radio"
+                  name="gameMode"
+                  checked={gameMode === "1v1"}
+                  onChange={() => setGameMode("1v1")}
+                />
+                1v1
+              </label>
+              <label className={styles.option}>
+                <input
+                  type="radio"
+                  name="gameMode"
+                  checked={gameMode === "2v2"}
+                  onChange={() => setGameMode("2v2")}
+                />
+                2v2 Team
+              </label>
+            </div>
           </fieldset>
           <label className={styles.field}>
             Your name

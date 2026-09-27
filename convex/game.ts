@@ -26,6 +26,7 @@ import {
   shouldAssignAutomaticLoser,
   snapshotTokens,
   GameMode,
+  shouldTransferRollToTeammate,
   startsSixStreak,
   TokenMoveChoice,
   TokenSnapshot,
@@ -1193,6 +1194,40 @@ export const passTurn = mutation({
 
     const now = assertActionInterval(player.lastActionAt, ACTION_MIN_INTERVAL_MS);
     await ctx.db.patch(player._id, { lastActionAt: now });
+
+    const mode = modeFromRoom(fresh);
+    const tokens = await loadTokens(ctx, args.roomId);
+    const transferRoll = shouldTransferRollToTeammate(
+      fresh,
+      player.color as Color,
+      teammateColor,
+      tokens,
+      playersAfter,
+      mode,
+    );
+
+    if (transferRoll && fresh.diceValue !== null) {
+      const dice = fresh.diceValue;
+      const turnId = (fresh.turnId ?? 0) + 1;
+      const passEvent = `${player.name} passed a ${dice} to ${teammate.name}`;
+      const turnText = turnAnnouncement(teammateColor, playersAfter, mode);
+      const { lastEvent, events } = withEvents(
+        fresh,
+        [passEvent, turnText],
+        now,
+      );
+      await ctx.db.patch(fresh._id, {
+        currentTurn: teammateColor,
+        turnId,
+        turnStartedAt: now,
+        lastActivityAt: now,
+        lastEvent,
+        events,
+      });
+      await scheduleTurnTimeout(ctx, fresh._id, turnId);
+      await maybeScheduleBotTurn(ctx, fresh._id, turnId);
+      return null;
+    }
 
     await beginTurn(ctx, fresh, teammateColor, {
       lastEvent: `${player.name} passed the turn to ${teammate.name}`,

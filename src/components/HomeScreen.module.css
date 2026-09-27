@@ -46,7 +46,7 @@
   color: var(--muted);
 }
 
-.field input {
+.field input:not([type="radio"]) {
   appearance: none;
   border: 2px solid rgba(30, 24, 16, 0.15);
   background: rgba(255, 255, 255, 0.7);
@@ -57,8 +57,91 @@
   font-family: inherit;
 }
 
-.field input:focus {
+.field input:not([type="radio"]):focus {
   border-color: var(--accent);
+}
+
+.fieldGroup {
+  border: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.fieldGroup legend {
+  font-size: 0.85rem;
+  color: var(--muted);
+  padding: 0;
+  margin-bottom: 0.1rem;
+}
+
+.optionList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.8rem 1rem;
+  border-radius: var(--radius-control);
+  border: 2px solid rgba(30, 24, 16, 0.12);
+  background: rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+  color: var(--ink);
+  font-size: 1rem;
+  font-weight: 500;
+  line-height: 1.25;
+  touch-action: manipulation;
+}
+
+.option:has(input:checked) {
+  border-color: var(--accent);
+  background: rgba(255, 200, 87, 0.28);
+}
+
+.option input[type="radio"] {
+  appearance: none;
+  flex-shrink: 0;
+  width: 1.35rem;
+  height: 1.35rem;
+  margin: 0;
+  padding: 0;
+  border: 2px solid rgba(30, 24, 16, 0.28);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.92);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.option input[type="radio"]::after {
+  content: "";
+  width: 0.35rem;
+  height: 0.7rem;
+  border: solid var(--ink);
+  border-width: 0 2.5px 2.5px 0;
+  transform: rotate(45deg) scale(0);
+  margin-top: -0.15rem;
+  transition: transform 0.12s ease;
+}
+
+.option input[type="radio"]:checked {
+  border-color: var(--accent-ink);
+  background: rgba(255, 200, 87, 0.55);
+}
+
+.option input[type="radio"]:checked::after {
+  transform: rotate(45deg) scale(1);
+}
+
+.option input[type="radio"]:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .hint {

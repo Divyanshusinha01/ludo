@@ -865,7 +865,9 @@ export function GameScreen({ data, roomId, clientId }: Props) {
           passTargetColor={passTargetColor}
           passTargetAriaLabel={
             passTargetColor && teammatePlayer
-              ? `Tap to pass turn to ${teammatePlayer.name}`
+              ? diceRolled && diceValue != null
+                ? `Tap to pass your ${diceValue} to ${teammatePlayer.name}`
+                : `Tap to pass turn to ${teammatePlayer.name}`
               : undefined
           }
           onPassTurn={passTargetColor ? onPassTurn : undefined}
@@ -957,7 +959,9 @@ export function GameScreen({ data, roomId, clientId }: Props) {
         )}
         {passTargetColor && teammatePlayer && !animating && (
           <p className={styles.prompt}>
-            Or tap {teammatePlayer.name}&apos;s home to pass your turn
+            {diceRolled && diceValue != null
+              ? `Or tap ${teammatePlayer.name}'s home to pass your ${diceValue}`
+              : `Or tap ${teammatePlayer.name}'s home to pass your turn`}
           </p>
         )}
         {!myTurn && room.status === "playing" && !turnAway && (
