@@ -43,3 +43,6 @@ next-env.d.ts
 
 # local Convex backend
 .convex/
+
+# Board art QA overlay (regenerate with npm run prepare:board)
+/public/images/folk-ludo-board-grid-debug.png

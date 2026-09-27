@@ -12,6 +12,7 @@ import {
   subscribeOfflineGame,
 } from "@/lib/offline/storage";
 import { Button } from "@/components/ui";
+import { BoardHeroImage } from "@/components/BoardHeroImage";
 import styles from "@/components/HomeScreen.module.css";
 
 type Mode = "prompt" | "setup" | "game";
@@ -61,6 +62,7 @@ export function OfflineClient() {
     return (
       <div className={styles.shell}>
         <div className={styles.hero}>
+          <BoardHeroImage />
           <p className={styles.brand}>Play offline</p>
           <h1 className={styles.headline}>Saved game on this device</h1>
           <p className={styles.sub}>

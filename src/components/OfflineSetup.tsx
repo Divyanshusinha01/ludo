@@ -6,6 +6,7 @@ import { botDisplayName } from "../../convex/lib/bot";
 import { createOfflineGame } from "@/lib/offline/engine";
 import { COLOR_HEX, COLOR_LABEL } from "@/lib/player";
 import { Button, ErrorText } from "./ui";
+import { BoardHeroImage } from "./BoardHeroImage";
 import styles from "./OfflineSetup.module.css";
 
 type SeatDraft = {
@@ -89,6 +90,7 @@ export function OfflineSetup({ onStart, onBack }: Props) {
   return (
     <div className={styles.shell}>
       <header className={styles.header}>
+        <BoardHeroImage />
         <p className={styles.brand}>Play offline</p>
         <p className={styles.sub}>
           Pass the device between humans on the couch, or mix in computer
