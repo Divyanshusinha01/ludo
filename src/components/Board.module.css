@@ -44,6 +44,7 @@
 /* Token position uses SVG transform attribute; CSS transform is for fx only. */
 .token {
   outline: none;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.35));
 }
 
 .tokenNum {
