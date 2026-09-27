@@ -8,8 +8,10 @@ import {
   getLegalMovesForActor,
   nextTurnSeatColor,
   shouldTransferRollToTeammate,
+  legalMovesForDelegatedRoll,
   pickNextColorForTeam,
   rotationColors,
+  turnSeatAfterDelegatedMove,
   teamAllTokensHome,
   teamIsAllHome,
   teamIsSpent,
@@ -130,9 +132,9 @@ describe("2v2 pass roll transfer", () => {
     { color: "blue" as const, team: "B" as const, eliminated: false, finishRank: null },
   ];
 
-  it("transfers any pending rolled face (not only 6)", () => {
+  it("transfers a pending rolled face when the teammate can use it", () => {
     const tokens = createInitialTokens();
-    tokens.find((t) => t.color === "red" && t.index === 0)!.steps = 10;
+    tokens.find((t) => t.color === "yellow" && t.index === 0)!.steps = 10;
     expect(
       shouldTransferRollToTeammate(
         { diceRolled: true, diceValue: 4 },
@@ -145,11 +147,8 @@ describe("2v2 pass roll transfer", () => {
     ).toBe(true);
   });
 
-  it("transfers a 6 when only the teammate can use it", () => {
+  it("does not transfer before the roll is consumed", () => {
     const tokens = createInitialTokens();
-    for (const t of tokens) {
-      if (t.color === "red") t.steps = FINISHED_STEPS - 1;
-    }
     expect(
       shouldTransferRollToTeammate(
         { diceRolled: false, diceValue: 6 },
@@ -159,7 +158,22 @@ describe("2v2 pass roll transfer", () => {
         roster,
         "2v2",
       ),
-    ).toBe(true);
+    ).toBe(false);
+  });
+
+  it("does not transfer when teammate has no legal use for the die", () => {
+    const tokens = createInitialTokens();
+    tokens.find((t) => t.color === "red" && t.index === 0)!.steps = 10;
+    expect(
+      shouldTransferRollToTeammate(
+        { diceRolled: true, diceValue: 3 },
+        "red",
+        "yellow",
+        tokens,
+        roster,
+        "2v2",
+      ),
+    ).toBe(false);
   });
 
   it("does not transfer when there is no roll to give", () => {
@@ -174,6 +188,55 @@ describe("2v2 pass roll transfer", () => {
         "2v2",
       ),
     ).toBe(false);
+  });
+});
+
+describe("2v2 delegated roll", () => {
+  const roster = [
+    { color: "red" as const, team: "A" as const, eliminated: false, finishRank: null },
+    { color: "yellow" as const, team: "A" as const, eliminated: false, finishRank: null },
+    { color: "green" as const, team: "B" as const, eliminated: false, finishRank: null },
+    { color: "blue" as const, team: "B" as const, eliminated: false, finishRank: null },
+  ];
+
+  it("lets delegate enter from yard with a passed 6", () => {
+    const tokens = createInitialTokens();
+    const moves = legalMovesForDelegatedRoll(tokens, "yellow", 6);
+    expect(moves.length).toBeGreaterThan(0);
+    expect(moves.every((m) => m.color === "yellow")).toBe(true);
+  });
+
+  it("does not let delegate move red tokens while red is still playing", () => {
+    const tokens = createInitialTokens();
+    tokens.find((t) => t.color === "red" && t.index === 0)!.steps = 10;
+    const moves = legalMovesForDelegatedRoll(tokens, "yellow", 4);
+    expect(moves.some((m) => m.color === "red")).toBe(false);
+  });
+
+  it("keeps rotation on red seat after delegated non-six move", () => {
+    const result = turnSeatAfterDelegatedMove(
+      "red",
+      4,
+      false,
+      false,
+      roster,
+      "2v2",
+    );
+    expect(result.grantsExtraRoll).toBe(false);
+    expect(result.nextSeat).toBe("green");
+  });
+
+  it("grants extra roll to red seat after delegated 6", () => {
+    const result = turnSeatAfterDelegatedMove(
+      "red",
+      6,
+      false,
+      false,
+      roster,
+      "2v2",
+    );
+    expect(result.grantsExtraRoll).toBe(true);
+    expect(result.nextSeat).toBe("red");
   });
 });
 

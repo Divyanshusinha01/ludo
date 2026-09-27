@@ -8,6 +8,9 @@ import { Id } from "../../convex/_generated/dataModel";
 import {
   findCaptureTargets,
   getLegalMovesForActor,
+  legalMovesForDelegatedRoll,
+  moveControllerColor,
+  rollControllerColor,
   teamTeammateColor,
   tryMoveSteps,
   turnActorColor,
@@ -227,16 +230,14 @@ export function GameScreen({ data, roomId, clientId }: Props) {
     const mode = data.room.mode === "2v2" ? "2v2" : "1v1";
     const turnSeat = data.room.currentTurn as Color;
     const roster = data.players as TeamPlayerLike[];
-    const actor = turnActorColor(turnSeat, roster, mode);
-    if (mePlayer?.color !== actor) return [];
+    const passedRollTo = data.room.passedRollTo ?? null;
+    const moveColor = moveControllerColor(turnSeat, roster, mode, passedRollTo);
+    if (mePlayer?.color !== moveColor) return [];
     const tokens = optimisticTokens ?? serverTokens;
-    return getLegalMovesForActor(
-      tokens,
-      actor,
-      roster,
-      mode,
-      diceValue,
-    );
+    if (passedRollTo != null) {
+      return legalMovesForDelegatedRoll(tokens, passedRollTo, diceValue);
+    }
+    return getLegalMovesForActor(tokens, moveColor, roster, mode, diceValue);
   }, [data, animating, localDice, optimisticTokens, serverTokens]);
 
   const finishRanks = useMemo(() => {
@@ -265,10 +266,15 @@ export function GameScreen({ data, roomId, clientId }: Props) {
   const diceRolled = localDice ? localDice.rolled : room.diceRolled;
   const turnSeat = room.currentTurn as Color;
   const roster = players as TeamPlayerLike[];
-  const turnActor = turnActorColor(
+  const gameMode = isTeamMode ? "2v2" : "1v1";
+  const passedRollTo = room.passedRollTo ?? null;
+  const turnActor = turnActorColor(turnSeat, roster, gameMode);
+  const rollController = rollControllerColor(turnSeat, roster, gameMode, null);
+  const moveController = moveControllerColor(
     turnSeat,
     roster,
-    isTeamMode ? "2v2" : "1v1",
+    gameMode,
+    passedRollTo,
   );
   const turnActorPlayer = players.find((p) => p.color === turnActor);
   const turnSeatPlayer = players.find((p) => p.color === turnSeat);
@@ -276,15 +282,19 @@ export function GameScreen({ data, roomId, clientId }: Props) {
     isTeamMode &&
     room.status === "playing" &&
     turnSeat !== turnActor &&
-    !!turnSeatPlayer?.finishRank;
-  const myTurn =
+    !!turnSeatPlayer?.finishRank &&
+    passedRollTo == null;
+  const meActive =
     !!me &&
-    me.color === turnActor &&
     room.status === "playing" &&
     !players.find((p) => p.color === me.color)?.eliminated &&
     players.find((p) => p.color === me.color)?.finishRank == null;
+  const iRoll =
+    meActive && me.color === rollController && passedRollTo == null;
+  const iMove = meActive && me.color === moveController && diceRolled;
+  const myTurn = iRoll || iMove;
   const canRoll =
-    myTurn && !diceRolled && !rolling && !animating && !optimisticTokens;
+    iRoll && !diceRolled && !rolling && !animating && !optimisticTokens;
 
   const teammateColor =
     isTeamMode && me ? teamTeammateColor(me.color as Color) : null;
@@ -294,7 +304,10 @@ export function GameScreen({ data, roomId, clientId }: Props) {
       : undefined;
   const canPass =
     isTeamMode &&
-    myTurn &&
+    meActive &&
+    me?.color === turnSeat &&
+    diceRolled &&
+    passedRollTo == null &&
     !proxyTurn &&
     room.status === "playing" &&
     !animating &&
@@ -856,7 +869,11 @@ export function GameScreen({ data, roomId, clientId }: Props) {
               : []
           }
           myColor={me?.color}
-          activeColor={room.status === "playing" ? turnActor : null}
+          activeColor={
+            room.status === "playing"
+              ? passedRollTo ?? turnActor
+              : null
+          }
           finishRanks={finishRanks}
           playerCount={players.length}
           fx={fx}
@@ -864,10 +881,8 @@ export function GameScreen({ data, roomId, clientId }: Props) {
           onSelectToken={onSelectToken}
           passTargetColor={passTargetColor}
           passTargetAriaLabel={
-            passTargetColor && teammatePlayer
-              ? diceRolled && diceValue != null
-                ? `Tap to pass your ${diceValue} to ${teammatePlayer.name}`
-                : `Tap to pass turn to ${teammatePlayer.name}`
+            passTargetColor && teammatePlayer && diceValue != null
+              ? `Tap to pass your ${diceValue} to ${teammatePlayer.name}`
               : undefined
           }
           onPassTurn={passTargetColor ? onPassTurn : undefined}
@@ -954,14 +969,22 @@ export function GameScreen({ data, roomId, clientId }: Props) {
                 : "Tap a glowing token to move"}
             </p>
           )}
-        {myTurn && !diceRolled && room.status === "playing" && !animating && (
+        {iRoll && !diceRolled && room.status === "playing" && !animating && (
           <p className={styles.prompt}>Your turn — roll the dice</p>
         )}
-        {passTargetColor && teammatePlayer && !animating && (
+        {passedRollTo != null &&
+          me?.color === passedRollTo &&
+          diceRolled &&
+          diceValue != null &&
+          !animating && (
+            <p className={styles.prompt}>
+              Use {turnSeatPlayer?.name ?? COLOR_LABEL[turnSeat]}&apos;s{" "}
+              {diceValue} — tap your token
+            </p>
+          )}
+        {passTargetColor && teammatePlayer && diceValue != null && !animating && (
           <p className={styles.prompt}>
-            {diceRolled && diceValue != null
-              ? `Or tap ${teammatePlayer.name}'s home to pass your ${diceValue}`
-              : `Or tap ${teammatePlayer.name}'s home to pass your turn`}
+            Or tap {teammatePlayer.name}&apos;s home to pass your {diceValue}
           </p>
         )}
         {!myTurn && room.status === "playing" && !turnAway && (

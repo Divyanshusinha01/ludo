@@ -34,6 +34,7 @@ export const GameError = {
   rejoinExpired: "Rejoin request expired — try again",
   passNotAllowed: "Pass is only available in 2v2 team mode",
   invalidPassTarget: "That's not your teammate's home",
+  passNothingToPass: "Roll first — nothing to pass yet",
 } as const;
 
 export type GameErrorMessage = (typeof GameError)[keyof typeof GameError];

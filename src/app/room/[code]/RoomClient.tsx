@@ -25,8 +25,10 @@ const VoicePanel = dynamic(
   { ssr: false },
 );
 import {
+  COLOR_HEX,
   formatConvexError,
   normalizeCode,
+  peekPendingJoinName,
   storeName,
   takePendingJoinName,
   useSessionId,
@@ -53,6 +55,7 @@ export function RoomClient({
   const clientId = useSessionId();
   const [joinError, setJoinError] = useState<string | null>(null);
   const [name, setName] = useState("");
+  const [nameFromHome] = useState(() => peekPendingJoinName());
   const [joining, setJoining] = useState(false);
   const [joinTeam, setJoinTeam] = useState<"A" | "B" | null>(null);
   const [offline, setOffline] = useState(false);
@@ -169,7 +172,7 @@ export function RoomClient({
   async function onJoin(e: FormEvent) {
     e.preventDefault();
     if (!clientId || joining) return;
-    const trimmed = name.trim();
+    const trimmed = (nameFromHome || name).trim();
     if (!trimmed) {
       setJoinError("Enter your name");
       return;
@@ -178,6 +181,7 @@ export function RoomClient({
     setJoinError(null);
     try {
       storeName(trimmed);
+      if (nameFromHome) takePendingJoinName();
       const result = await joinRoom({
         code: roomCode,
         clientId,
@@ -278,59 +282,106 @@ export function RoomClient({
       data?.players.filter((p) => p.team === "A").length ?? 0;
     const teamBCount =
       data?.players.filter((p) => p.team === "B").length ?? 0;
+    const joinNameReady = !!(nameFromHome || name.trim());
     return (
       <div className={styles.center}>
         <h1>{midGame ? `Rejoin room ${roomCode}` : `Join room ${roomCode}`}</h1>
         <p>
           {midGame
             ? "Game already in progress — enter the same name you used before to request a rejoin."
-            : teamMode
-              ? "Pick a team and enter your name."
-              : "Type your name to sit down."}
+            : teamMode && nameFromHome
+              ? "Choose your team — your name is already set from home."
+              : teamMode
+                ? "Pick a team and enter your name."
+                : "Type your name to sit down."}
         </p>
         <form className={styles.joinForm} onSubmit={onJoin}>
           {teamMode && (
-            <fieldset className={styles.field}>
-              <legend>Team</legend>
-              <label>
-                <input
-                  type="radio"
-                  name="joinTeam"
-                  checked={joinTeam === "A"}
-                  disabled={teamACount >= 2}
-                  onChange={() => setJoinTeam("A")}
-                />
-                Team A (Red & Yellow){teamACount >= 2 ? " — full" : ` (${teamACount}/2)`}
-              </label>
-              <label>
-                <input
-                  type="radio"
-                  name="joinTeam"
-                  checked={joinTeam === "B"}
-                  disabled={teamBCount >= 2}
-                  onChange={() => setJoinTeam("B")}
-                />
-                Team B (Green & Blue){teamBCount >= 2 ? " — full" : ` (${teamBCount}/2)`}
-              </label>
+            <fieldset className={styles.fieldGroup}>
+              <legend>Pick your team</legend>
+              <div className={styles.optionList} role="radiogroup" aria-label="Team">
+                <label
+                  className={`${styles.option} ${teamACount >= 2 ? styles.optionDisabled : ""}`}
+                >
+                  <input
+                    type="radio"
+                    name="joinTeam"
+                    checked={joinTeam === "A"}
+                    disabled={teamACount >= 2}
+                    onChange={() => setJoinTeam("A")}
+                  />
+                  <span className={styles.optionBody}>
+                    <span className={styles.optionTitle}>Team A</span>
+                    <span className={styles.optionMeta}>
+                      Red & Yellow ·{" "}
+                      {teamACount >= 2 ? "Full" : `${teamACount}/2 seats`}
+                    </span>
+                    <span className={styles.teamSwatches} aria-hidden>
+                      <span
+                        className={styles.teamSwatch}
+                        style={{ background: COLOR_HEX.red }}
+                      />
+                      <span
+                        className={styles.teamSwatch}
+                        style={{ background: COLOR_HEX.yellow }}
+                      />
+                    </span>
+                  </span>
+                </label>
+                <label
+                  className={`${styles.option} ${teamBCount >= 2 ? styles.optionDisabled : ""}`}
+                >
+                  <input
+                    type="radio"
+                    name="joinTeam"
+                    checked={joinTeam === "B"}
+                    disabled={teamBCount >= 2}
+                    onChange={() => setJoinTeam("B")}
+                  />
+                  <span className={styles.optionBody}>
+                    <span className={styles.optionTitle}>Team B</span>
+                    <span className={styles.optionMeta}>
+                      Green & Blue ·{" "}
+                      {teamBCount >= 2 ? "Full" : `${teamBCount}/2 seats`}
+                    </span>
+                    <span className={styles.teamSwatches} aria-hidden>
+                      <span
+                        className={styles.teamSwatch}
+                        style={{ background: COLOR_HEX.green }}
+                      />
+                      <span
+                        className={styles.teamSwatch}
+                        style={{ background: COLOR_HEX.blue }}
+                      />
+                    </span>
+                  </span>
+                </label>
+              </div>
             </fieldset>
           )}
-          <label className={styles.field}>
-            Your name
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              maxLength={20}
-              placeholder="e.g. Divsi"
-              autoComplete="off"
-              autoFocus
-            />
-          </label>
+          {nameFromHome && !midGame ? (
+            <p className={styles.joinAsName}>
+              Joining as <strong>{nameFromHome}</strong>
+            </p>
+          ) : (
+            <label className={styles.field}>
+              Your name
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                maxLength={20}
+                placeholder="e.g. Divsi"
+                autoComplete="off"
+                autoFocus
+              />
+            </label>
+          )}
           <Button
             type="submit"
             variant="primary"
             disabled={
               joining ||
-              !name.trim() ||
+              !joinNameReady ||
               !clientId ||
               (teamMode && !joinTeam)
             }

@@ -26,6 +26,8 @@ export default defineSchema({
     currentTurn: colorValidator,
     diceValue: v.union(v.number(), v.null()),
     diceRolled: v.boolean(),
+    /** 2v2: teammate who must consume the seat holder's pending roll (one move). */
+    passedRollTo: v.optional(v.union(colorValidator, v.null())),
     consecutiveSixes: v.number(),
     /**
      * @deprecated Three-six rollback now uses sixStreakSnapshot.

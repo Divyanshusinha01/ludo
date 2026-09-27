@@ -197,12 +197,26 @@ export function setPendingJoinName(name: string) {
   }
 }
 
+function readPendingJoinName(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return (sessionStorage.getItem(PENDING_JOIN_NAME_KEY) ?? "").trim().slice(0, 20);
+  } catch {
+    return "";
+  }
+}
+
+/** Name from home join flow — read without clearing (e.g. 2v2 team pick on room page). */
+export function peekPendingJoinName(): string {
+  return readPendingJoinName();
+}
+
 export function takePendingJoinName(): string {
   if (typeof window === "undefined") return "";
   try {
-    const value = sessionStorage.getItem(PENDING_JOIN_NAME_KEY) ?? "";
+    const value = readPendingJoinName();
     sessionStorage.removeItem(PENDING_JOIN_NAME_KEY);
-    return value.trim().slice(0, 20);
+    return value;
   } catch {
     return "";
   }

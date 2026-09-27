@@ -140,37 +140,76 @@ export function nextTurnSeatColor(
 
 export type TokenMoveChoice = { color: Color; index: number };
 
+/** Who may roll on this turn (2v2: seat actor while no delegated roll pending). */
+export function rollControllerColor(
+  seatColor: Color,
+  players: TeamPlayerLike[],
+  mode: GameMode | undefined,
+  _passedRollTo: Color | null | undefined,
+): Color {
+  return turnActorColor(seatColor, players, mode);
+}
+
+/** Who may move tokens now (2v2 delegate or normal seat actor). */
+export function moveControllerColor(
+  seatColor: Color,
+  players: TeamPlayerLike[],
+  mode: GameMode | undefined,
+  passedRollTo: Color | null | undefined,
+): Color {
+  if (passedRollTo != null) return passedRollTo;
+  return turnActorColor(seatColor, players, mode);
+}
+
+/** Legal moves when a teammate is consuming a passed roll (own colour only). */
+export function legalMovesForDelegatedRoll(
+  tokens: TokenState[],
+  delegateColor: Color,
+  dice: number,
+): TokenMoveChoice[] {
+  const moves: TokenMoveChoice[] = [];
+  for (const index of getLegalMoves(tokens, delegateColor, dice)) {
+    moves.push({ color: delegateColor, index });
+  }
+  return moves;
+}
+
 /**
- * In 2v2, passing can hand off a pending roll (not only skip before rolling).
- * True when the actor still has an unconsumed roll to give their teammate.
+ * After a delegated move, rotation stays on the seat; extra rolls stay with the seat actor.
+ */
+export function turnSeatAfterDelegatedMove(
+  seatColor: Color,
+  dice: number,
+  didCapture: boolean,
+  reachedHome: boolean,
+  players: TeamPlayerLike[],
+  mode: GameMode | undefined,
+): { nextSeat: Color; grantsExtraRoll: boolean } {
+  const grantsExtraRoll = gainsExtraTurn(dice, didCapture, reachedHome);
+  if (grantsExtraRoll) {
+    return { nextSeat: seatColor, grantsExtraRoll: true };
+  }
+  return {
+    nextSeat: nextTurnSeatColor(seatColor, players, mode),
+    grantsExtraRoll: false,
+  };
+}
+
+/**
+ * In 2v2, passing hands off a pending rolled die for one teammate move.
  */
 export function shouldTransferRollToTeammate(
   room: { diceRolled: boolean; diceValue: number | null },
-  actorColor: Color,
+  _actorColor: Color,
   teammateColor: Color,
   tokens: TokenState[],
-  players: TeamPlayerLike[],
+  _players: TeamPlayerLike[],
   mode: GameMode | undefined,
 ): boolean {
   const dice = room.diceValue;
-  if (dice === null) return false;
-  if (room.diceRolled) return true;
-  if (mode !== "2v2" || dice !== 6) return false;
-  const actorLegal = getLegalMovesForActor(
-    tokens,
-    actorColor,
-    players,
-    mode,
-    dice,
-  );
-  const mateLegal = getLegalMovesForActor(
-    tokens,
-    teammateColor,
-    players,
-    mode,
-    dice,
-  );
-  return actorLegal.length === 0 && mateLegal.length > 0;
+  if (dice === null || !room.diceRolled) return false;
+  if (mode !== "2v2") return false;
+  return legalMovesForDelegatedRoll(tokens, teammateColor, dice).length > 0;
 }
 
 export function getLegalMovesForActor(

@@ -90,6 +90,7 @@ function publicRoom(room: Doc<"rooms">) {
     vsComputer: !!room.vsComputer,
     mode: room.mode === "2v2" ? ("2v2" as const) : ("1v1" as const),
     winningTeam: room.winningTeam ?? null,
+    passedRollTo: room.passedRollTo ?? null,
   };
 }
 
@@ -263,6 +264,7 @@ async function resetBoard(
     currentTurn: firstTurn,
     diceValue: null,
     diceRolled: false,
+    passedRollTo: null,
     consecutiveSixes: 0,
     lastMovedTokenIndex: null,
     sixStreakSnapshot: null,
@@ -1602,6 +1604,7 @@ const roomBundleValidator = v.union(
       vsComputer: v.boolean(),
       mode: v.union(v.literal("1v1"), v.literal("2v2")),
       winningTeam: v.union(v.literal("A"), v.literal("B"), v.null()),
+      passedRollTo: v.union(colorValidator, v.null()),
     }),
     players: v.array(
       v.object({

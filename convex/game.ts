@@ -18,9 +18,12 @@ import {
   gainsExtraTurn,
   getLegalMovesForActor,
   hasWon,
+  legalMovesForDelegatedRoll,
   MAX_TIMEOUT_LIVES,
+  moveControllerColor,
   nextColorAmong,
   nextTurnSeatColor,
+  rollControllerColor,
   rollFairDice,
   rotationColors,
   shouldAssignAutomaticLoser,
@@ -171,8 +174,14 @@ async function maybeScheduleBotTurn(
   if ((room.turnId ?? 0) !== turnId) return;
   const players = await seatedPlayers(ctx, roomId);
   const mode = modeFromRoom(room);
-  const actorColor = turnActorColor(room.currentTurn as Color, players, mode);
-  const current = players.find((p) => p.color === actorColor);
+  const seat = room.currentTurn as Color;
+  const passedRollTo = room.passedRollTo ?? null;
+  const botColor =
+    passedRollTo ??
+    (room.diceRolled
+      ? moveControllerColor(seat, players, mode, null)
+      : rollControllerColor(seat, players, mode, null));
+  const current = players.find((p) => p.color === botColor);
   if (!current || !current.isBot || current.eliminated || current.finishRank != null) {
     return;
   }
@@ -210,6 +219,7 @@ async function beginTurn(
     ...restPatch,
     currentTurn: next,
     diceRolled: false,
+    passedRollTo: null,
     consecutiveSixes: 0,
     lastMovedTokenIndex: null,
     sixStreakSnapshot: null,
@@ -503,11 +513,10 @@ function assertFreshTurn(room: Doc<"rooms">, expectedTurnId: number) {
   }
 }
 
-async function requireActivePlayer(
+async function requirePlayerInRoom(
   ctx: MutationCtx,
   roomId: Id<"rooms">,
   clientId: string,
-  room: Doc<"rooms">,
 ) {
   const player = await ctx.db
     .query("players")
@@ -520,10 +529,47 @@ async function requireActivePlayer(
   if (player.eliminated || player.finishRank != null) {
     fail(GameError.eliminated);
   }
+  return player;
+}
+
+async function requireRollPlayer(
+  ctx: MutationCtx,
+  roomId: Id<"rooms">,
+  clientId: string,
+  room: Doc<"rooms">,
+) {
+  const player = await requirePlayerInRoom(ctx, roomId, clientId);
+  if ((room.passedRollTo ?? null) != null) {
+    fail(GameError.notYourTurn);
+  }
   const players = await seatedPlayers(ctx, roomId);
   const mode = modeFromRoom(room);
-  const actor = turnActorColor(room.currentTurn as Color, players, mode);
-  if (player.color !== actor) fail(GameError.notYourTurn);
+  const rollColor = rollControllerColor(
+    room.currentTurn as Color,
+    players,
+    mode,
+    null,
+  );
+  if (player.color !== rollColor) fail(GameError.notYourTurn);
+  return player;
+}
+
+async function requireMovePlayer(
+  ctx: MutationCtx,
+  roomId: Id<"rooms">,
+  clientId: string,
+  room: Doc<"rooms">,
+) {
+  const player = await requirePlayerInRoom(ctx, roomId, clientId);
+  const players = await seatedPlayers(ctx, roomId);
+  const mode = modeFromRoom(room);
+  const moveColor = moveControllerColor(
+    room.currentTurn as Color,
+    players,
+    mode,
+    room.passedRollTo ?? null,
+  );
+  if (player.color !== moveColor) fail(GameError.notYourTurn);
   return player;
 }
 
@@ -716,15 +762,14 @@ async function executeMove(
 
   const players = await seatedPlayers(ctx, roomId);
   const mode = modeFromRoom(room);
+  const seatColor = room.currentTurn as Color;
+  const passedRollTo = room.passedRollTo ?? null;
+  const wasDelegated = passedRollTo != null;
   const actorColor = player.color as Color;
   const tokens = await loadTokens(ctx, roomId);
-  const legalTokenMoves = getLegalMovesForActor(
-    tokens,
-    actorColor,
-    players,
-    mode,
-    dice,
-  );
+  const legalTokenMoves = wasDelegated
+    ? legalMovesForDelegatedRoll(tokens, passedRollTo, dice)
+    : getLegalMovesForActor(tokens, actorColor, players, mode, dice);
   const legal = legalTokenMoves.some(
     (m) => m.color === tokenColor && m.index === tokenIndex,
   );
@@ -973,18 +1018,23 @@ async function executeMove(
     capturedLabel = `${captures.length} tokens`;
   }
 
+  const seatPlayer = players.find((p) => p.color === seatColor);
+  const rollAgainActorName =
+    wasDelegated && seatPlayer ? seatPlayer.name : player.name;
+
   if (extraTurn) {
     const turnId = (room.turnId ?? 0) + 1;
     const reason = reachedHome
-      ? `${player.name} reached home — roll again`
+      ? `${rollAgainActorName} reached home — roll again`
       : didCapture
-        ? `${player.name} captured ${capturedLabel} — roll again`
-        : `${player.name} rolled 6 — roll again`;
+        ? `${rollAgainActorName} captured ${capturedLabel} — roll again`
+        : `${rollAgainActorName} rolled 6 — roll again`;
 
     const keepSixStreak = dice === 6;
     await ctx.db.patch(roomId, {
       diceRolled: false,
       diceValue: dice,
+      passedRollTo: null,
       consecutiveSixes: keepSixStreak ? room.consecutiveSixes : 0,
       lastMovedTokenIndex: null,
       sixStreakSnapshot: keepSixStreak
@@ -998,11 +1048,7 @@ async function executeMove(
     await scheduleTurnTimeout(ctx, roomId, turnId);
     await maybeScheduleBotTurn(ctx, roomId, turnId);
   } else {
-    const next = advanceTurnColor(
-      room.currentTurn as Color,
-      players,
-      mode,
-    );
+    const next = advanceTurnColor(seatColor, players, mode);
     const moveText = didCapture
       ? `${player.name} captured ${capturedLabel}`
       : `${player.name} moved`;
@@ -1076,21 +1122,16 @@ export const rollDice = mutation({
 
     if (room.diceRolled) fail(GameError.diceAlreadyRolled);
 
-    const player = await requireActivePlayer(ctx, args.roomId, clientId, room);
+    const player = await requireRollPlayer(ctx, args.roomId, clientId, room);
     if (player.isBot) fail(GameError.notYourTurn);
     await assertTurnNotExpired(ctx, room);
 
     // Re-read after possible timeout (assertTurnNotExpired throws if expired).
     const fresh = (await ctx.db.get(args.roomId))!;
     if (fresh.diceRolled) fail(GameError.diceAlreadyRolled);
-    // Re-check seat against post-timeout state (should have thrown already).
-    const playersAfter = await seatedPlayers(ctx, args.roomId);
-    const actor = turnActorColor(
-      fresh.currentTurn as Color,
-      playersAfter,
-      modeFromRoom(fresh),
-    );
-    if (player.color !== actor) fail(GameError.notYourTurn);
+    if ((fresh.passedRollTo ?? null) != null) {
+      fail(GameError.notYourTurn);
+    }
 
     const now = assertActionInterval(player.lastActionAt, ACTION_MIN_INTERVAL_MS);
     await ctx.db.patch(player._id, { lastActionAt: now });
@@ -1118,19 +1159,11 @@ export const moveToken = mutation({
 
     assertFreshTurn(room, args.turnId);
 
-    const player = await requireActivePlayer(ctx, args.roomId, clientId, room);
+    const player = await requireMovePlayer(ctx, args.roomId, clientId, room);
     if (player.isBot) fail(GameError.notYourTurn);
     await assertTurnNotExpired(ctx, room);
 
     const fresh = (await ctx.db.get(args.roomId))!;
-    const playersAfter = await seatedPlayers(ctx, args.roomId);
-    const actor = turnActorColor(
-      fresh.currentTurn as Color,
-      playersAfter,
-      modeFromRoom(fresh),
-    );
-    if (player.color !== actor) fail(GameError.notYourTurn);
-
     const now = assertActionInterval(player.lastActionAt, ACTION_MIN_INTERVAL_MS);
     await ctx.db.patch(player._id, { lastActionAt: now });
 
@@ -1166,23 +1199,20 @@ export const passTurn = mutation({
 
     assertFreshTurn(room, args.turnId);
 
-    const player = await requireActivePlayer(ctx, args.roomId, clientId, room);
+    const player = await requirePlayerInRoom(ctx, args.roomId, clientId);
     if (player.isBot) fail(GameError.notYourTurn);
     await assertTurnNotExpired(ctx, room);
 
     const fresh = (await ctx.db.get(args.roomId))!;
-    const playersAfter = await seatedPlayers(ctx, args.roomId);
-    const actor = turnActorColor(
-      fresh.currentTurn as Color,
-      playersAfter,
-      modeFromRoom(fresh),
-    );
-    if (player.color !== actor) fail(GameError.notYourTurn);
     if (fresh.currentTurn !== player.color) fail(GameError.notYourTurn);
+    if ((fresh.passedRollTo ?? null) != null) {
+      fail(GameError.notYourTurn);
+    }
 
     const teammateColor = teamTeammateColor(player.color as Color);
     if (args.targetColor !== teammateColor) fail(GameError.invalidPassTarget);
 
+    const playersAfter = await seatedPlayers(ctx, args.roomId);
     const teammate = playersAfter.find((p) => p.color === teammateColor);
     if (
       !teammate ||
@@ -1206,32 +1236,27 @@ export const passTurn = mutation({
       mode,
     );
 
-    if (transferRoll && fresh.diceValue !== null) {
-      const dice = fresh.diceValue;
-      const turnId = (fresh.turnId ?? 0) + 1;
-      const passEvent = `${player.name} passed a ${dice} to ${teammate.name}`;
-      const turnText = turnAnnouncement(teammateColor, playersAfter, mode);
-      const { lastEvent, events } = withEvents(
-        fresh,
-        [passEvent, turnText],
-        now,
-      );
-      await ctx.db.patch(fresh._id, {
-        currentTurn: teammateColor,
-        turnId,
-        turnStartedAt: now,
-        lastActivityAt: now,
-        lastEvent,
-        events,
-      });
-      await scheduleTurnTimeout(ctx, fresh._id, turnId);
-      await maybeScheduleBotTurn(ctx, fresh._id, turnId);
-      return null;
-    }
+    if (!transferRoll) fail(GameError.passNothingToPass);
 
-    await beginTurn(ctx, fresh, teammateColor, {
-      lastEvent: `${player.name} passed the turn to ${teammate.name}`,
+    const dice = fresh.diceValue!;
+    const turnId = (fresh.turnId ?? 0) + 1;
+    const passEvent = `${player.name} passed a ${dice} to ${teammate.name}`;
+    const delegateText = `${teammate.name} — use ${player.name}'s ${dice}`;
+    const { lastEvent, events } = withEvents(
+      fresh,
+      [passEvent, delegateText],
+      now,
+    );
+    await ctx.db.patch(fresh._id, {
+      passedRollTo: teammateColor,
+      turnId,
+      turnStartedAt: now,
+      lastActivityAt: now,
+      lastEvent,
+      events,
     });
+    await scheduleTurnTimeout(ctx, fresh._id, turnId);
+    await maybeScheduleBotTurn(ctx, fresh._id, turnId);
     return null;
   },
 });
@@ -1274,8 +1299,14 @@ export const playBotTurn = internalMutation({
 
     const players = await seatedPlayers(ctx, args.roomId);
     const mode = modeFromRoom(room);
-    const actorColor = turnActorColor(room.currentTurn as Color, players, mode);
-    const player = players.find((p) => p.color === actorColor);
+    const seat = room.currentTurn as Color;
+    const passedRollTo = room.passedRollTo ?? null;
+    const botColor =
+      passedRollTo ??
+      (room.diceRolled
+        ? moveControllerColor(seat, players, mode, null)
+        : rollControllerColor(seat, players, mode, null));
+    const player = players.find((p) => p.color === botColor);
     if (
       !player ||
       !player.isBot ||
@@ -1293,6 +1324,7 @@ export const playBotTurn = internalMutation({
     });
 
     if (!room.diceRolled) {
+      if (passedRollTo != null) return null;
       const result = await executeRoll(
         ctx,
         args.roomId,
@@ -1320,13 +1352,16 @@ export const playBotTurn = internalMutation({
     const dice = room.diceValue;
     if (dice === null) return null;
     const tokens = await loadTokens(ctx, args.roomId);
-    const legal = getLegalMovesForActor(
-      tokens,
-      player.color as Color,
-      players,
-      mode,
-      dice,
-    );
+    const legal =
+      passedRollTo != null
+        ? legalMovesForDelegatedRoll(tokens, passedRollTo, dice)
+        : getLegalMovesForActor(
+            tokens,
+            player.color as Color,
+            players,
+            mode,
+            dice,
+          );
     if (legal.length === 0) {
       const next = advanceTurnColor(room.currentTurn as Color, players, mode);
       await beginTurn(ctx, room, next, {
@@ -1392,21 +1427,30 @@ export const getLegalTokenIndexes = query({
 
     const players = await seatedPlayers(ctx, args.roomId);
     const mode = modeFromRoom(room);
-    const actor = turnActorColor(room.currentTurn as Color, players, mode);
+    const moveColor = moveControllerColor(
+      room.currentTurn as Color,
+      players,
+      mode,
+      room.passedRollTo ?? null,
+    );
 
     if (
       !player ||
       player.eliminated ||
       player.finishRank != null ||
-      player.color !== actor
+      player.color !== moveColor
     ) {
       return [];
     }
 
     const tokens = await loadTokens(ctx, args.roomId);
+    const passedRollTo = room.passedRollTo ?? null;
+    if (passedRollTo != null) {
+      return legalMovesForDelegatedRoll(tokens, passedRollTo, room.diceValue);
+    }
     return getLegalMovesForActor(
       tokens,
-      actor,
+      moveColor,
       players,
       mode,
       room.diceValue,
