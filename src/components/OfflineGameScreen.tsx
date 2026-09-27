@@ -341,7 +341,7 @@ function OfflineGameScreenInner({ onStartNew, game, data }: InnerProps) {
     }
   }
 
-  async function onSelectToken(tokenIndex: number) {
+  async function onSelectToken(_color: Color, tokenIndex: number) {
     await commitMove(tokenIndex);
   }
 

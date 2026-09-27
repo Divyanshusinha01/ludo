@@ -37,6 +37,7 @@ type Fx = {
 type Props = {
   tokens: TokenLayerToken[];
   selectable?: number[];
+  selectableTokens?: Array<{ color: Color; index: number }>;
   myColor?: Color | null;
   activeColor?: Color | null;
   fx?: Fx;
@@ -258,15 +259,30 @@ function TokenPawn({
   );
 }
 
+function tokenCanSelect(
+  color: Color,
+  index: number,
+  selectable: number[],
+  selectableTokens: Array<{ color: Color; index: number }> | undefined,
+  myColor: Color | null | undefined,
+): boolean {
+  if (selectableTokens && selectableTokens.length > 0) {
+    return selectableTokens.some((m) => m.color === color && m.index === index);
+  }
+  return myColor === color && selectable.includes(index);
+}
+
 function TokensScene({
   tokens,
   selectable,
+  selectableTokens,
   myColor,
   activeColor,
   hopEnabled,
 }: {
   tokens: TokenLayerToken[];
   selectable: number[];
+  selectableTokens?: Array<{ color: Color; index: number }>;
   myColor?: Color | null;
   activeColor?: Color | null;
   hopEnabled: boolean;
@@ -295,8 +311,13 @@ function TokensScene({
         const pos =
           positions.get(key) ??
           tokenSvgPosition(t.color, t.index, t.steps);
-        const canSelect =
-          myColor === t.color && selectable.includes(t.index);
+        const canSelect = tokenCanSelect(
+          t.color,
+          t.index,
+          selectable,
+          selectableTokens,
+          myColor,
+        );
         const isActiveTurn = activeColor === t.color;
         return (
           <TokenPawn
@@ -523,6 +544,7 @@ function EffectsLayer({
 export function TokenLayer3D({
   tokens,
   selectable = [],
+  selectableTokens,
   myColor,
   activeColor,
   fx,
@@ -555,6 +577,7 @@ export function TokenLayer3D({
       <TokensScene
         tokens={tokens}
         selectable={selectable}
+        selectableTokens={selectableTokens}
         myColor={myColor}
         activeColor={activeColor}
         hopEnabled={hopEnabled}

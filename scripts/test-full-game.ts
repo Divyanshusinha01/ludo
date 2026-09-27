@@ -105,10 +105,12 @@ async function playToCompletion(client: ConvexHttpClient) {
       roomId,
       clientId,
     });
+    const pick = legal[0]!;
     await client.mutation(api.game.moveToken, {
       roomId,
       clientId,
-      tokenIndex: legal[0]!,
+      tokenIndex: pick.index,
+      ...(pick.color ? { tokenColor: pick.color } : {}),
       turnId: fresh!.room.turnId,
     });
   }

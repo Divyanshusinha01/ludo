@@ -7,8 +7,12 @@ import { api } from "../../convex/_generated/api";
 import { Id } from "../../convex/_generated/dataModel";
 import {
   findCaptureTargets,
-  getLegalMoves,
+  getLegalMovesForActor,
+  teamTeammateColor,
   tryMoveSteps,
+  turnActorColor,
+  type TeamPlayerLike,
+  type TokenMoveChoice,
 } from "../../convex/lib/ludo";
 import { useRoomPresence } from "@/hooks/useRoomPresence";
 import { useOpponentDiceRoll } from "@/hooks/useOpponentDiceRoll";
@@ -87,6 +91,7 @@ export function GameScreen({ data, roomId, clientId }: Props) {
   const router = useRouter();
   const rollDice = useMutation(api.game.rollDice);
   const moveToken = useMutation(api.game.moveToken);
+  const passTurn = useMutation(api.game.passTurn);
   const rematch = useMutation(api.rooms.rematch);
   const leaveRoom = useMutation(api.rooms.leaveRoom);
   const reportTrouble = useMutation(api.trouble.reportTrouble);
@@ -210,18 +215,28 @@ export function GameScreen({ data, roomId, clientId }: Props) {
     }
   }, [data.room.status, data.room.winner]);
 
-  const selectable = useMemo(() => {
-    if (!data.me) return [] as number[];
+  const selectableTokens = useMemo((): TokenMoveChoice[] => {
+    if (!data.me) return [];
     const rolled = localDice ? localDice.rolled : data.room.diceRolled;
     const diceValue = localDice ? localDice.value : data.room.diceValue;
-    if (!rolled || diceValue === null) return [] as number[];
-    if (data.me.color !== data.room.currentTurn) return [];
+    if (!rolled || diceValue === null) return [];
     if (data.room.status !== "playing") return [];
     if (animating || optimisticTokens) return [];
     const mePlayer = data.players.find((p) => p.isMe);
     if (mePlayer?.finishRank != null || mePlayer?.eliminated) return [];
+    const mode = data.room.mode === "2v2" ? "2v2" : "1v1";
+    const turnSeat = data.room.currentTurn as Color;
+    const roster = data.players as TeamPlayerLike[];
+    const actor = turnActorColor(turnSeat, roster, mode);
+    if (mePlayer?.color !== actor) return [];
     const tokens = optimisticTokens ?? serverTokens;
-    return getLegalMoves(tokens, data.me.color, diceValue);
+    return getLegalMovesForActor(
+      tokens,
+      actor,
+      roster,
+      mode,
+      diceValue,
+    );
   }, [data, animating, localDice, optimisticTokens, serverTokens]);
 
   const finishRanks = useMemo(() => {
@@ -243,16 +258,55 @@ export function GameScreen({ data, roomId, clientId }: Props) {
   }, [eventCount]);
 
   const { room, players, me } = data;
+  const isTeamMode = room.mode === "2v2";
+  const teamLabel = (team: "A" | "B" | null | undefined) =>
+    team === "A" || team === "B" ? `Team ${team}` : null;
   const diceValue = localDice ? localDice.value : room.diceValue;
   const diceRolled = localDice ? localDice.rolled : room.diceRolled;
+  const turnSeat = room.currentTurn as Color;
+  const roster = players as TeamPlayerLike[];
+  const turnActor = turnActorColor(
+    turnSeat,
+    roster,
+    isTeamMode ? "2v2" : "1v1",
+  );
+  const turnActorPlayer = players.find((p) => p.color === turnActor);
+  const turnSeatPlayer = players.find((p) => p.color === turnSeat);
+  const proxyTurn =
+    isTeamMode &&
+    room.status === "playing" &&
+    turnSeat !== turnActor &&
+    !!turnSeatPlayer?.finishRank;
   const myTurn =
     !!me &&
-    me.color === room.currentTurn &&
+    me.color === turnActor &&
     room.status === "playing" &&
     !players.find((p) => p.color === me.color)?.eliminated &&
     players.find((p) => p.color === me.color)?.finishRank == null;
   const canRoll =
     myTurn && !diceRolled && !rolling && !animating && !optimisticTokens;
+
+  const teammateColor =
+    isTeamMode && me ? teamTeammateColor(me.color as Color) : null;
+  const teammatePlayer =
+    teammateColor != null
+      ? players.find((p) => p.color === teammateColor)
+      : undefined;
+  const canPass =
+    isTeamMode &&
+    myTurn &&
+    !proxyTurn &&
+    room.status === "playing" &&
+    !animating &&
+    !optimisticTokens &&
+    !rolling;
+  const passTargetColor =
+    canPass &&
+    teammatePlayer &&
+    !teammatePlayer.eliminated &&
+    teammatePlayer.finishRank == null
+      ? teammateColor
+      : null;
 
   const { hideOpponentFace } = useOpponentDiceRoll({
     playing: room.status === "playing",
@@ -270,8 +324,8 @@ export function GameScreen({ data, roomId, clientId }: Props) {
 
   const diceDisplayValue = hideOpponentFace ? null : diceValue;
 
-  const turnLabel = COLOR_LABEL[room.currentTurn as Color];
-  const turnPlayer = players.find((p) => p.color === room.currentTurn);
+  const turnLabel = COLOR_LABEL[turnSeat];
+  const turnPlayer = turnActorPlayer;
   const turnAway =
     room.status === "playing" &&
     !!turnPlayer &&
@@ -288,20 +342,29 @@ export function GameScreen({ data, roomId, clientId }: Props) {
     !!players.find((p) => p.isMe && !p.connected) &&
     !offline;
 
-  async function applyOptimisticMove(tokenIndex: number, dice: number) {
+  async function applyOptimisticMove(
+    tokenColor: Color,
+    tokenIndex: number,
+    dice: number,
+  ) {
     if (!me) return;
     const base = optimisticTokens ?? serverTokens;
     const mover = base.find(
-      (t) => t.color === me.color && t.index === tokenIndex,
+      (t) => t.color === tokenColor && t.index === tokenIndex,
     );
     const dest = mover ? tryMoveSteps(mover.steps, dice) : null;
     if (mover && dest !== null) {
-      const captures = findCaptureTargets(base, me.color, dest);
+      const captures = findCaptureTargets(
+        base,
+        tokenColor,
+        dest,
+        isTeamMode ? "2v2" : "1v1",
+      );
       const capturedKeys = new Set(
         captures.map((c) => `${c.color}:${c.index}`),
       );
       const next = base.map((t) => {
-        if (t.color === me.color && t.index === tokenIndex) {
+        if (t.color === tokenColor && t.index === tokenIndex) {
           return { ...t, steps: dest };
         }
         if (capturedKeys.has(`${t.color}:${t.index}`)) {
@@ -360,8 +423,15 @@ export function GameScreen({ data, roomId, clientId }: Props) {
         setReveal(true);
         setTimeout(() => setReveal(false), ROLL_REVEAL_MS);
         await sleep(AUTO_MOVE_DELAY_MS);
+        const autoPick =
+          result.legalTokenMoves?.[0] ??
+          ({
+            color: me.color as Color,
+            index: result.legalMoves[0] ?? 0,
+          } satisfies TokenMoveChoice);
         await applyOptimisticMove(
-          result.legalMoves[0] ?? 0,
+          autoPick.color,
+          autoPick.index,
           result.value,
         );
         if (result.autoMove.captured) haptic("capture");
@@ -387,7 +457,24 @@ export function GameScreen({ data, roomId, clientId }: Props) {
     }
   }
 
-  async function commitMove(tokenIndex: number) {
+  async function onPassTurn(color: Color) {
+    if (passTargetColor !== color) return;
+    setError(null);
+    haptic("tap");
+    try {
+      await passTurn({
+        roomId,
+        clientId,
+        turnId: room.turnId,
+        targetColor: color,
+      });
+      setLocalDice(null);
+    } catch (e) {
+      setError(formatConvexError(e, "Could not pass turn"));
+    }
+  }
+
+  async function commitMove(tokenColor: Color, tokenIndex: number) {
     if (
       animating ||
       moveLock.current ||
@@ -402,13 +489,14 @@ export function GameScreen({ data, roomId, clientId }: Props) {
     setError(null);
     haptic("tap");
 
-    await applyOptimisticMove(tokenIndex, diceValue);
+    await applyOptimisticMove(tokenColor, tokenIndex, diceValue);
 
     try {
       const result = await moveToken({
         roomId,
         clientId,
         tokenIndex,
+        ...(tokenColor !== me.color ? { tokenColor } : {}),
         turnId: room.turnId,
       });
       if (result.captured) {
@@ -427,7 +515,7 @@ export function GameScreen({ data, roomId, clientId }: Props) {
     }
   }
 
-  async function onSelectToken(tokenIndex: number) {
+  async function onSelectToken(tokenColor: Color, tokenIndex: number) {
     if (
       animating ||
       moveLock.current ||
@@ -439,7 +527,7 @@ export function GameScreen({ data, roomId, clientId }: Props) {
       return;
     }
     // Explicit token id from geometric hit-test — never infer from stack order.
-    await commitMove(tokenIndex);
+    await commitMove(tokenColor, tokenIndex);
   }
 
   async function onRematch() {
@@ -579,7 +667,9 @@ export function GameScreen({ data, roomId, clientId }: Props) {
 
           {room.status === "finished" ? (
             <h2 className={styles.title}>
-              {COLOR_LABEL[room.winner as Color]} wins!
+              {isTeamMode && room.winningTeam
+                ? `Team ${room.winningTeam} wins!`
+                : `${COLOR_LABEL[room.winner as Color]} wins!`}
             </h2>
           ) : (
             <h2 className={styles.title}>
@@ -587,7 +677,9 @@ export function GameScreen({ data, roomId, clientId }: Props) {
                 className={styles.dot}
                 style={{ background: COLOR_HEX[room.currentTurn as Color] }}
               />
-              {turnLabel}&apos;s turn
+              {proxyTurn
+                ? `${COLOR_LABEL[turnSeat]}'s turn — ${turnActorPlayer?.name ?? turnLabel} playing for teammate`
+                : `${turnLabel}'s turn`}
               {myTurn
                 ? " — you"
                 : botThinking
@@ -676,11 +768,17 @@ export function GameScreen({ data, roomId, clientId }: Props) {
       <ul className={styles.players}>
         {players.map((p) => {
           const isActive =
-            p.color === room.currentTurn &&
+            p.color === turnActor &&
             room.status === "playing" &&
             p.finishRank == null &&
             !p.eliminated;
           const finished = p.finishRank != null && !p.eliminated;
+          const teammate = isTeamMode
+            ? teamTeammateColor(p.color as Color)
+            : null;
+          const teammateName = teammate
+            ? players.find((x) => x.color === teammate)?.name
+            : null;
           return (
             <li
               key={p._id}
@@ -691,11 +789,12 @@ export function GameScreen({ data, roomId, clientId }: Props) {
               <span className={styles.playerMeta}>
                 <span className={styles.playerName}>
                   {p.name}
+                  {isTeamMode && p.team ? ` · ${teamLabel(p.team)}` : ""}
                   {p.isMe ? " (you)" : ""}
                   {p.eliminated
                     ? " · out"
                     : finished
-                      ? ` · #${p.finishRank}`
+                      ? ` · finished #${p.finishRank}${teammateName ? ` — ${teammateName} plays your turns` : ""}`
                       : p.isBot
                         ? isActive
                           ? " · turn"
@@ -723,15 +822,21 @@ export function GameScreen({ data, roomId, clientId }: Props) {
       {room.status === "playing" && (
         <div
           className={styles.diceRow}
-          style={{ ["--c" as string]: COLOR_HEX[room.currentTurn as Color] }}
+          style={{ ["--c" as string]: COLOR_HEX[turnActor] }}
         >
           <span className={styles.diceOwner}>
             <span className={styles.swatch} />
-            {myTurn ? "Your dice" : `${turnLabel}'s dice`}
+            {myTurn
+              ? proxyTurn
+                ? "Your dice (teammate's turn slot)"
+                : "Your dice"
+              : proxyTurn
+                ? `${turnActorPlayer?.name ?? turnLabel}'s dice (for ${COLOR_LABEL[turnSeat]})`
+                : `${turnLabel}'s dice`}
           </span>
           <Dice
             value={diceDisplayValue}
-            color={room.currentTurn as Color}
+            color={turnActor}
             rolling={rolling || hideOpponentFace}
             disabled={!canRoll}
             waitingLabel={waitingLabel}
@@ -744,27 +849,35 @@ export function GameScreen({ data, roomId, clientId }: Props) {
       <div className={styles.boardSlot}>
         <Board
           tokens={displayTokens}
-          selectable={
+          selectable={[]}
+          selectableTokens={
             myTurn && diceRolled && !animating && !optimisticTokens
-              ? selectable
+              ? selectableTokens
               : []
           }
           myColor={me?.color}
-          activeColor={
-            room.status === "playing" ? (room.currentTurn as Color) : null
-          }
+          activeColor={room.status === "playing" ? turnActor : null}
           finishRanks={finishRanks}
           playerCount={players.length}
           fx={fx}
           winBurstKey={winBurstKey}
           onSelectToken={onSelectToken}
+          passTargetColor={passTargetColor}
+          passTargetAriaLabel={
+            passTargetColor && teammatePlayer
+              ? `Tap to pass turn to ${teammatePlayer.name}`
+              : undefined
+          }
+          onPassTurn={passTargetColor ? onPassTurn : undefined}
         />
       </div>
 
       <div className={styles.controls}>
         {room.status === "finished" && (
           <div className={styles.results}>
-            <h3 className={styles.resultsTitle}>Final rankings</h3>
+            <h3 className={styles.resultsTitle}>
+              {isTeamMode ? "Final results" : "Final rankings"}
+            </h3>
             <ol className={styles.rankList}>
               {(room.rankings.length > 0
                 ? room.rankings
@@ -774,6 +887,10 @@ export function GameScreen({ data, roomId, clientId }: Props) {
                 const place = i + 1;
                 const isWinner = color === room.winner || place === 1;
                 const isLoser = place === players.length;
+                const onWinningTeam =
+                  isTeamMode &&
+                  room.winningTeam &&
+                  p?.team === room.winningTeam;
                 return (
                   <li
                     key={color}
@@ -782,7 +899,14 @@ export function GameScreen({ data, roomId, clientId }: Props) {
                     <span className={styles.rankNum}>{place}</span>
                     <span className={styles.swatch} />
                     {p?.name ?? COLOR_LABEL[color as Color]}
-                    {isWinner
+                    {isTeamMode && p?.team
+                      ? ` (${teamLabel(p.team)})`
+                      : ""}
+                    {isTeamMode
+                      ? onWinningTeam
+                        ? " · winning team"
+                        : " · losing team"
+                      : isWinner
                       ? " · winner"
                       : isLoser
                         ? " · lose"
@@ -820,12 +944,21 @@ export function GameScreen({ data, roomId, clientId }: Props) {
 
         {myTurn &&
           diceRolled &&
-          selectable.length > 0 &&
+          selectableTokens.length > 0 &&
           !animating && (
-            <p className={styles.prompt}>Tap a glowing token to move</p>
+            <p className={styles.prompt}>
+              {proxyTurn
+                ? "Tap your or your finished teammate's glowing token"
+                : "Tap a glowing token to move"}
+            </p>
           )}
         {myTurn && !diceRolled && room.status === "playing" && !animating && (
           <p className={styles.prompt}>Your turn — roll the dice</p>
+        )}
+        {passTargetColor && teammatePlayer && !animating && (
+          <p className={styles.prompt}>
+            Or tap {teammatePlayer.name}&apos;s home to pass your turn
+          </p>
         )}
         {!myTurn && room.status === "playing" && !turnAway && (
           <p className={styles.waiting}>Waiting for {turnLabel}…</p>

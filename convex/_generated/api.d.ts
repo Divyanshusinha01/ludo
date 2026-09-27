@@ -19,6 +19,7 @@ import type * as lib_log from "../lib/log.js";
 import type * as lib_ludo from "../lib/ludo.js";
 import type * as lib_roomAuth from "../lib/roomAuth.js";
 import type * as lib_session from "../lib/session.js";
+import type * as lib_teams from "../lib/teams.js";
 import type * as rooms from "../rooms.js";
 import type * as trouble from "../trouble.js";
 import type * as voice from "../voice.js";
@@ -41,6 +42,7 @@ declare const fullApi: ApiFromModules<{
   "lib/ludo": typeof lib_ludo;
   "lib/roomAuth": typeof lib_roomAuth;
   "lib/session": typeof lib_session;
+  "lib/teams": typeof lib_teams;
   rooms: typeof rooms;
   trouble: typeof trouble;
   voice: typeof voice;

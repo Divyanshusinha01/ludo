@@ -10,6 +10,153 @@ export const OPPOSITE_COLOR: Record<Color, Color> = {
   blue: "green",
 };
 
+export type Team = "A" | "B";
+export type GameMode = "1v1" | "2v2";
+
+export const TEAM_COLORS: Record<Team, Color[]> = {
+  A: ["red", "yellow"],
+  B: ["green", "blue"],
+};
+
+export function teamOfColor(color: Color): Team {
+  return TEAM_COLORS.A.includes(color) ? "A" : "B";
+}
+
+/** Next free seat colour on a fixed team (red/yellow or green/blue). */
+export function pickNextColorForTeam(
+  seated: Color[],
+  team: Team,
+): Color | undefined {
+  return TEAM_COLORS[team].find((c) => !seated.includes(c));
+}
+
+export type TeamPlayerLike = {
+  color: Color;
+  team?: Team;
+  eliminated?: boolean;
+  finishRank?: number | null;
+};
+
+export function playerTeam(p: TeamPlayerLike): Team {
+  return p.team ?? teamOfColor(p.color);
+}
+
+function teamMembers(players: TeamPlayerLike[], team: Team): TeamPlayerLike[] {
+  return players.filter((p) => playerTeam(p) === team);
+}
+
+/** Both teammates finished home (not eliminated). */
+export function teamIsAllHome(players: TeamPlayerLike[], team: Team): boolean {
+  const members = teamMembers(players, team);
+  if (members.length < 2) return false;
+  return members.every((p) => !p.eliminated && p.finishRank != null);
+}
+
+/**
+ * Every teammate is home or eliminated, but not both home — team cannot win.
+ */
+export function teamIsSpent(players: TeamPlayerLike[], team: Team): boolean {
+  const members = teamMembers(players, team);
+  if (members.length < 2) return false;
+  const allDone = members.every(
+    (p) => p.eliminated || p.finishRank != null,
+  );
+  const allHome = members.every(
+    (p) => !p.eliminated && p.finishRank != null,
+  );
+  return allDone && !allHome;
+}
+
+/** Fixed 2v2 partner (red↔yellow, green↔blue). */
+export function teamTeammateColor(color: Color): Color {
+  return OPPOSITE_COLOR[color];
+}
+
+export function isPlayerFinished(p: TeamPlayerLike): boolean {
+  return !p.eliminated && p.finishRank != null;
+}
+
+/**
+ * Who rolls and moves for this rotation seat. In 2v2, a finished seat is
+ * played by their teammate.
+ */
+export function turnActorColor(
+  seatColor: Color,
+  players: TeamPlayerLike[],
+  mode?: GameMode,
+): Color {
+  if (mode !== "2v2") return seatColor;
+  const seat = players.find((p) => p.color === seatColor);
+  if (seat && isPlayerFinished(seat)) {
+    return teamTeammateColor(seatColor);
+  }
+  return seatColor;
+}
+
+/** Token colours the actor may move (own + finished teammate's in 2v2). */
+export function controllableColorsForActor(
+  actorColor: Color,
+  players: TeamPlayerLike[],
+  mode?: GameMode,
+): Color[] {
+  if (mode !== "2v2") return [actorColor];
+  const team = teamOfColor(actorColor);
+  const colors: Color[] = [actorColor];
+  for (const c of TEAM_COLORS[team]) {
+    if (c === actorColor) continue;
+    const p = players.find((pl) => pl.color === c);
+    if (p && isPlayerFinished(p)) colors.push(c);
+  }
+  return colors;
+}
+
+/**
+ * Turn rotation pool. 1v1 skips finished players; 2v2 keeps finished seats so
+ * the teammate can play those turns.
+ */
+export function rotationColors(
+  players: TeamPlayerLike[],
+  mode?: GameMode,
+): Color[] {
+  const seated = COLORS.filter((c) =>
+    players.some((p) => p.color === c && !p.eliminated),
+  );
+  if (mode !== "2v2") {
+    return seated.filter((c) => {
+      const p = players.find((pl) => pl.color === c);
+      return p && !isPlayerFinished(p);
+    });
+  }
+  return seated;
+}
+
+export function nextTurnSeatColor(
+  currentSeat: Color,
+  players: TeamPlayerLike[],
+  mode?: GameMode,
+): Color {
+  return nextColorAmong(currentSeat, rotationColors(players, mode));
+}
+
+export type TokenMoveChoice = { color: Color; index: number };
+
+export function getLegalMovesForActor(
+  tokens: TokenState[],
+  actorColor: Color,
+  players: TeamPlayerLike[],
+  mode: GameMode | undefined,
+  dice: number,
+): TokenMoveChoice[] {
+  const colors = controllableColorsForActor(actorColor, players, mode);
+  const moves: TokenMoveChoice[] = [];
+  for (const color of colors) {
+    for (const index of getLegalMoves(tokens, color, dice)) {
+      moves.push({ color, index });
+    }
+  }
+  return moves;
+}
+
 /**
  * Next free house. When only one seat is taken, prefer the opposite corner
  * so a 2-player game sits across the board (red↔yellow / green↔blue).
@@ -49,6 +196,19 @@ export const SAFE_CELLS = new Set<number>([
 export const FINISHED_STEPS = 56;
 export const HOME_ENTRY_STEPS = 51;
 export const MAX_TRACK_STEPS = 50;
+
+/** True when all 8 tokens for a team are in the centre (2v2 win). */
+export function teamAllTokensHome(
+  tokens: TokenState[],
+  team: Team,
+): boolean {
+  for (const color of TEAM_COLORS[team]) {
+    const mine = tokens.filter((t) => t.color === color);
+    if (mine.length === 0) return false;
+    if (!mine.every((t) => t.steps === FINISHED_STEPS)) return false;
+  }
+  return true;
+}
 
 /** Per-turn deadline (server-authoritative). */
 export const TURN_TIMEOUT_MS = 60_000;
@@ -215,6 +375,7 @@ export function findCaptureTargets(
   tokens: TokenState[],
   moverColor: Color,
   destSteps: number,
+  mode?: GameMode,
 ): TokenState[] {
   if (destSteps < 0 || destSteps > MAX_TRACK_STEPS) return [];
   const abs = absoluteTrackPosition(moverColor, destSteps);
@@ -223,6 +384,12 @@ export function findCaptureTargets(
   const captured: TokenState[] = [];
   for (const t of tokens) {
     if (t.color === moverColor) continue;
+    if (
+      mode === "2v2" &&
+      teamOfColor(t.color) === teamOfColor(moverColor)
+    ) {
+      continue;
+    }
     if (t.steps < 0 || t.steps > MAX_TRACK_STEPS) continue;
     const otherAbs = absoluteTrackPosition(t.color, t.steps);
     if (otherAbs !== abs) continue;

@@ -43,15 +43,24 @@ export function Lobby({ data, roomId, clientId, code }: Props) {
   const [busy, setBusy] = useState(false);
   const [troubleBusy, setTroubleBusy] = useState(false);
   const [kickBusy, setKickBusy] = useState<Color | null>(null);
-  const [addBotBusy, setAddBotBusy] = useState(false);
+  const [addBotBusy, setAddBotBusy] = useState<Color | "any" | null>(null);
 
   useRoomPresence(roomId, clientId);
 
   const { room, players, me } = data;
   const isHost = !!me?.isHost;
-  const canStart = players.length >= 2 && isHost;
+  const isTeamMode = room.mode === "2v2";
+  const teamAFull = players.filter((p) => p.team === "A").length === 2;
+  const teamBFull = players.filter((p) => p.team === "B").length === 2;
+  const canStart =
+    isHost &&
+    (isTeamMode ? players.length === 4 && teamAFull && teamBFull : players.length >= 2);
   const canAddBot =
-    isHost && !room.vsComputer && players.length < 4 && !addBotBusy && !busy;
+    isHost &&
+    !room.vsComputer &&
+    players.length < 4 &&
+    addBotBusy === null &&
+    !busy;
 
   async function onTroubleshoot() {
     if (troubleBusy || isTroubleshootCoolingDown()) return;
@@ -71,7 +80,7 @@ export function Lobby({ data, roomId, clientId, code }: Props) {
         setError(null);
         setBusy(false);
         setKickBusy(null);
-        setAddBotBusy(false);
+        setAddBotBusy(null);
       },
     });
   }
@@ -111,15 +120,19 @@ export function Lobby({ data, roomId, clientId, code }: Props) {
     }
   }
 
-  async function onAddBot() {
+  async function onAddBot(seatColor?: Color) {
     setError(null);
-    setAddBotBusy(true);
+    setAddBotBusy(seatColor ?? "any");
     try {
-      await addBot({ roomId, clientId });
+      await addBot({
+        roomId,
+        clientId,
+        ...(seatColor ? { color: seatColor } : {}),
+      });
     } catch (e) {
       setError(formatConvexError(e, "Could not add computer"));
     } finally {
-      setAddBotBusy(false);
+      setAddBotBusy(null);
     }
   }
 
@@ -162,8 +175,8 @@ export function Lobby({ data, roomId, clientId, code }: Props) {
         </div>
       </header>
 
-      <ul className={styles.list}>
-        {(["red", "green", "yellow", "blue"] as Color[]).map((color) => {
+      {(() => {
+        const renderSeat = (color: Color) => {
           const p = players.find((x) => x.color === color);
           return (
             <li
@@ -191,6 +204,16 @@ export function Lobby({ data, roomId, clientId, code }: Props) {
                         : "Away"
                     : "Empty"}
                 </span>
+                {isHost && !p && !room.vsComputer && (
+                  <button
+                    type="button"
+                    className={styles.fillBot}
+                    disabled={!canAddBot || addBotBusy === color}
+                    onClick={() => onAddBot(color)}
+                  >
+                    {addBotBusy === color ? "Adding…" : "Add computer"}
+                  </button>
+                )}
                 {isHost && p && !p.isMe && (
                   <button
                     type="button"
@@ -204,21 +227,42 @@ export function Lobby({ data, roomId, clientId, code }: Props) {
               </div>
             </li>
           );
-        })}
-      </ul>
+        };
+
+        if (isTeamMode) {
+          return (
+            <>
+              <h2 className={styles.teamHeading}>Team A</h2>
+              <ul className={styles.list}>
+                {(["red", "yellow"] as Color[]).map(renderSeat)}
+              </ul>
+              <h2 className={styles.teamHeading}>Team B</h2>
+              <ul className={styles.list}>
+                {(["green", "blue"] as Color[]).map(renderSeat)}
+              </ul>
+            </>
+          );
+        }
+
+        return (
+          <ul className={styles.list}>
+            {(["red", "green", "yellow", "blue"] as Color[]).map(renderSeat)}
+          </ul>
+        );
+      })()}
 
       <RejoinRequests roomId={roomId} clientId={clientId} isHost={isHost} />
 
-      {isHost && !room.vsComputer && (
+      {isHost && !room.vsComputer && !isTeamMode && (
         <Button
           variant="secondary"
           disabled={!canAddBot}
-          onClick={onAddBot}
+          onClick={() => onAddBot()}
           style={{ width: "100%" }}
         >
           {players.length >= 4
             ? "Room full"
-            : addBotBusy
+            : addBotBusy === "any"
               ? "Adding…"
               : "Add computer"}
         </Button>
@@ -231,9 +275,13 @@ export function Lobby({ data, roomId, clientId, code }: Props) {
           onClick={onStart}
           style={{ width: "100%" }}
         >
-          {players.length >= 2
-            ? `Start game (${players.length} players)`
-            : `Need at least 2 players (${players.length}/2)`}
+          {isTeamMode
+            ? canStart
+              ? "Start 2v2 game"
+              : `Need 2 per team (${players.length}/4)`
+            : players.length >= 2
+              ? `Start game (${players.length} players)`
+              : `Need at least 2 players (${players.length}/2)`}
         </Button>
       ) : (
         <p className={styles.muted}>

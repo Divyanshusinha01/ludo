@@ -5,6 +5,10 @@ export const GameError = {
   roomNotFound: "Room not found",
   notInRoom: "Not in this room",
   roomFull: "Room is full",
+  teamFull: "That team already has 2 players",
+  needFullTeams: "Need 2 players on each team to start",
+  teamRequired: "Choose Team A or Team B",
+  seatTaken: "That seat is already taken",
   gameStarted: "Game already started",
   gameNotPlaying: "Game not in progress",
   gameFinished: "Game already finished",
@@ -28,6 +32,8 @@ export const GameError = {
   nameTaken: "That name is already in this room",
   rejoinDenied: "Host denied your rejoin request",
   rejoinExpired: "Rejoin request expired — try again",
+  passNotAllowed: "Pass is only available in 2v2 team mode",
+  invalidPassTarget: "That's not your teammate's home",
 } as const;
 
 export type GameErrorMessage = (typeof GameError)[keyof typeof GameError];

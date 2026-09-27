@@ -12,10 +12,7 @@ import {
 } from "@/lib/boardGeometry";
 import { useCanUse3DBoard } from "@/hooks/useCanUse3D";
 import { COLOR_HEX, type Color } from "@/lib/player";
-import {
-  rankHouseLabel,
-  resolveTokenHit,
-} from "../../convex/lib/ludo";
+import { rankHouseLabel } from "../../convex/lib/ludo";
 import styles from "./Board.module.css";
 
 const TokenLayer3D = dynamic(
@@ -61,7 +58,13 @@ type Props = {
   render3DTokens?: boolean;
   /** Bumps to spawn a board-wide win confetti burst. */
   winBurstKey?: number | string | null;
-  onSelectToken?: (tokenIndex: number) => void;
+  /** When set, overrides `selectable` + `myColor` (2v2 multi-colour moves). */
+  selectableTokens?: Array<{ color: Color; index: number }>;
+  onSelectToken?: (color: Color, tokenIndex: number) => void;
+  /** 2v2: teammate home to tap for passing the turn. */
+  passTargetColor?: Color | null;
+  passTargetAriaLabel?: string;
+  onPassTurn?: (color: Color) => void;
 };
 
 const YARD_RECTS: Record<Color, { x: number; y: number }> = {
@@ -137,9 +140,31 @@ function clientToSvg(
   return { x: local.x, y: local.y };
 }
 
+function tokenIsSelectable(
+  color: Color,
+  index: number,
+  selectable: number[],
+  selectableTokens: Array<{ color: Color; index: number }> | undefined,
+  myColor: Color | null | undefined,
+): boolean {
+  if (selectableTokens && selectableTokens.length > 0) {
+    return selectableTokens.some((m) => m.color === color && m.index === index);
+  }
+  return myColor === color && selectable.includes(index);
+}
+
+function pointInYard(px: number, py: number, color: Color): boolean {
+  const { x, y } = YARD_RECTS[color];
+  const left = x * CELL;
+  const top = y * CELL;
+  const side = 6 * CELL;
+  return px >= left && px <= left + side && py >= top && py <= top + side;
+}
+
 export function Board({
   tokens,
   selectable = [],
+  selectableTokens,
   myColor,
   activeColor,
   finishRanks = {},
@@ -148,11 +173,18 @@ export function Board({
   render3DTokens = true,
   winBurstKey = null,
   onSelectToken,
+  passTargetColor = null,
+  passTargetAriaLabel,
+  onPassTurn,
 }: Props) {
   const size = 15 * CELL;
   const positions = stackedPositions(tokens);
   const svgRef = useRef<SVGSVGElement>(null);
-  const interactive = selectable.length > 0 && !!onSelectToken;
+  const hasSelectable =
+    (selectableTokens?.length ?? 0) > 0 || selectable.length > 0;
+  const canPassTurn = !!passTargetColor && !!onPassTurn;
+  const interactive =
+    (hasSelectable && !!onSelectToken) || canPassTurn;
   const use3D = useCanUse3DBoard() && render3DTokens;
 
   // Stack sizes for visual badges on overlapping tokens.
@@ -172,38 +204,87 @@ export function Board({
   }
 
   const pickSelectableAt = useCallback(
-    (clientX: number, clientY: number): number | null => {
-      if (!interactive || !onSelectToken || !myColor) return null;
+    (
+      clientX: number,
+      clientY: number,
+    ): { color: Color; index: number } | null => {
+      if (!interactive || !onSelectToken) return null;
       const svg = svgRef.current;
       if (!svg) return null;
       const point = clientToSvg(svg, clientX, clientY);
       const candidates = tokens
-        .filter(
-          (t) => t.color === myColor && selectable.includes(t.index),
+        .filter((t) =>
+          tokenIsSelectable(
+            t.color,
+            t.index,
+            selectable,
+            selectableTokens,
+            myColor,
+          ),
         )
         .map((t) => {
           const pos =
             positions.get(`${t.color}-${t.index}`) ??
             tokenSvgPosition(t.color, t.index, t.steps);
-          return { index: t.index, x: pos.x, y: pos.y };
+          return { color: t.color, index: t.index, x: pos.x, y: pos.y };
         });
-      return resolveTokenHit(point, candidates, TOKEN_HIT_RADIUS);
+      let best: { color: Color; index: number; dist: number } | null = null;
+      for (const c of candidates) {
+        const dist = Math.hypot(point.x - c.x, point.y - c.y);
+        if (dist > TOKEN_HIT_RADIUS) continue;
+        if (
+          !best ||
+          dist < best.dist ||
+          (dist === best.dist && c.index < best.index)
+        ) {
+          best = { color: c.color, index: c.index, dist };
+        }
+      }
+      return best ? { color: best.color, index: best.index } : null;
     },
-    [interactive, myColor, onSelectToken, positions, selectable, tokens],
+    [
+      interactive,
+      myColor,
+      onSelectToken,
+      positions,
+      selectable,
+      selectableTokens,
+      tokens,
+    ],
   );
 
   const handlePointer = useCallback(
     (e: PointerEvent<SVGSVGElement>) => {
-      if (!interactive || !onSelectToken) return;
+      if (!interactive) return;
       // Only primary button / touch.
       if (e.pointerType === "mouse" && e.button !== 0) return;
-      const hit = pickSelectableAt(e.clientX, e.clientY);
-      if (hit == null) return;
-      e.preventDefault();
-      e.stopPropagation();
-      onSelectToken(hit);
+      if (onSelectToken) {
+        const hit = pickSelectableAt(e.clientX, e.clientY);
+        if (hit != null) {
+          e.preventDefault();
+          e.stopPropagation();
+          onSelectToken(hit.color, hit.index);
+          return;
+        }
+      }
+      if (canPassTurn && passTargetColor && onPassTurn) {
+        const svg = svgRef.current;
+        if (!svg) return;
+        const point = clientToSvg(svg, e.clientX, e.clientY);
+        if (!pointInYard(point.x, point.y, passTargetColor)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        onPassTurn(passTargetColor);
+      }
     },
-    [interactive, onSelectToken, pickSelectableAt],
+    [
+      canPassTurn,
+      interactive,
+      onPassTurn,
+      onSelectToken,
+      passTargetColor,
+      pickSelectableAt,
+    ],
   );
 
   return (
@@ -278,6 +359,7 @@ export function Board({
           const badge = RANK_BADGE[color];
           const label =
             rank != null ? rankHouseLabel(rank, playerCount) : null;
+          const isPassTarget = passTargetColor === color;
           return (
             <g key={color}>
               <rect
@@ -287,7 +369,21 @@ export function Board({
                 height={6 * CELL}
                 fill={COLOR_HEX[color]}
                 opacity={0.92}
+                aria-label={isPassTarget ? passTargetAriaLabel : undefined}
               />
+              {isPassTarget && (
+                <rect
+                  x={x * CELL + 8}
+                  y={y * CELL + 8}
+                  width={6 * CELL - 16}
+                  height={6 * CELL - 16}
+                  fill="none"
+                  stroke="#fff"
+                  strokeWidth={10}
+                  rx={24}
+                  className={styles.passTargetRing}
+                />
+              )}
               <rect
                 x={x * CELL + 60}
                 y={y * CELL + 60}
@@ -408,8 +504,13 @@ export function Board({
           const pos =
             positions.get(key) ??
             tokenSvgPosition(t.color, t.index, t.steps);
-          const canSelect =
-            myColor === t.color && selectable.includes(t.index);
+          const canSelect = tokenIsSelectable(
+            t.color,
+            t.index,
+            selectable,
+            selectableTokens,
+            myColor,
+          );
           const isActiveTurn = activeColor === t.color;
           const finished = t.steps === 56;
           const stacked = (stackSizes.get(key) ?? 1) > 1;
@@ -518,6 +619,7 @@ export function Board({
           <TokenLayer3D
             tokens={tokens}
             selectable={selectable}
+            selectableTokens={selectableTokens}
             myColor={myColor}
             activeColor={activeColor}
             fx={fx}

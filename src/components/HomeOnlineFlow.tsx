@@ -32,6 +32,7 @@ export function HomeOnlineFlow({ mode, offline, onModeChange }: Props) {
   const createRoom = useMutation(api.rooms.createRoom);
   const reportTrouble = useMutation(api.trouble.reportTrouble);
   const [name, setName] = useState("");
+  const [gameMode, setGameMode] = useState<"1v1" | "2v2">("1v1");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -71,7 +72,11 @@ export function HomeOnlineFlow({ mode, offline, onModeChange }: Props) {
     setError(null);
     try {
       storeName(trimmed);
-      const res = await createRoom({ clientId, name: trimmed });
+      const res = await createRoom({
+        clientId,
+        name: trimmed,
+        mode: gameMode,
+      });
       router.push(`/room/${res.code}?rid=${res.roomId}`);
     } catch (err) {
       setError(formatConvexError(err, "Failed to create"));
@@ -137,6 +142,27 @@ export function HomeOnlineFlow({ mode, offline, onModeChange }: Props) {
         </div>
       ) : mode === "create" ? (
         <form className={styles.actions} onSubmit={onCreate}>
+          <fieldset className={styles.field}>
+            <legend>Game mode</legend>
+            <label>
+              <input
+                type="radio"
+                name="gameMode"
+                checked={gameMode === "1v1"}
+                onChange={() => setGameMode("1v1")}
+              />
+              1v1
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="gameMode"
+                checked={gameMode === "2v2"}
+                onChange={() => setGameMode("2v2")}
+              />
+              2v2 Team
+            </label>
+          </fieldset>
           <label className={styles.field}>
             Your name
             <input

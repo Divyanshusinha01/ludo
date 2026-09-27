@@ -78,6 +78,12 @@ export default defineSchema({
     seatedColors: v.optional(v.array(colorValidator)),
     /** Solo vs-computer room — rejects human joins; bots are server-driven. */
     vsComputer: v.optional(v.boolean()),
+    /** Absent or "1v1" = classic free-for-all; "2v2" = fixed team pairs. */
+    mode: v.optional(v.union(v.literal("1v1"), v.literal("2v2"))),
+    /** Set when a 2v2 match ends — clearer than inferring from seat colours. */
+    winningTeam: v.optional(
+      v.union(v.literal("A"), v.literal("B"), v.null()),
+    ),
   })
     .index("by_code", ["code"])
     .index("by_host", ["hostClientId"])
@@ -109,6 +115,8 @@ export default defineSchema({
     lastTroubleAt: v.optional(v.number()),
     /** Server-driven seat; never accepts client heartbeats as authority. */
     isBot: v.optional(v.boolean()),
+    /** Manual team pick in 2v2 lobby (host is always Team A). */
+    team: v.optional(v.union(v.literal("A"), v.literal("B"))),
   })
     .index("by_room", ["roomId"])
     .index("by_room_client", ["roomId", "clientId"])

@@ -16,20 +16,31 @@ import {
   findCaptureTargets,
   FINISHED_STEPS,
   gainsExtraTurn,
-  getLegalMoves,
+  getLegalMovesForActor,
   hasWon,
   MAX_TIMEOUT_LIVES,
   nextColorAmong,
+  nextTurnSeatColor,
   rollFairDice,
+  rotationColors,
   shouldAssignAutomaticLoser,
   snapshotTokens,
+  GameMode,
   startsSixStreak,
+  TokenMoveChoice,
   TokenSnapshot,
   TokenState,
   tryMoveSteps,
+  turnActorColor,
+  teamTeammateColor,
   TURN_TIMEOUT_MS,
 } from "./lib/ludo";
+import { colorValidator } from "./schema";
 import { BOT_THINK_MS, pickBotMove } from "./lib/bot";
+import {
+  maybeFinishTeamByElimination,
+  maybeFinishTeamMatch,
+} from "./lib/teams";
 import { withEvent, withEvents } from "./lib/events";
 import { GameError, fail } from "./lib/errors";
 import { logEvent } from "./lib/log";
@@ -72,6 +83,36 @@ function playableColors(players: Doc<"players">[]): Color[] {
         p.color === c && !p.eliminated && p.finishRank == null,
     ),
   );
+}
+
+function modeFromRoom(room: Doc<"rooms">): GameMode {
+  return room.mode === "2v2" ? "2v2" : "1v1";
+}
+
+function advanceTurnColor(
+  current: Color,
+  players: Doc<"players">[],
+  mode: GameMode,
+): Color {
+  if (mode === "2v2") {
+    return nextTurnSeatColor(current, players, mode);
+  }
+  return nextColorAmong(current, playableColors(players));
+}
+
+function turnAnnouncement(
+  seat: Color,
+  players: Doc<"players">[],
+  mode: GameMode,
+): string {
+  const actor = turnActorColor(seat, players, mode);
+  const actorPlayer = players.find((p) => p.color === actor);
+  const seatPlayer = players.find((p) => p.color === seat);
+  if (mode === "2v2" && seat !== actor && seatPlayer && actorPlayer) {
+    return `${actorPlayer.name} playing for ${seatPlayer.name} (${seat}'s turn)`;
+  }
+  if (actorPlayer) return `${actorPlayer.name}'s turn`;
+  return `${seat}'s turn`;
 }
 
 /** Restore every token to a prior board snapshot (three-six rollback). */
@@ -128,7 +169,9 @@ async function maybeScheduleBotTurn(
   if (!room || room.status !== "playing") return;
   if ((room.turnId ?? 0) !== turnId) return;
   const players = await seatedPlayers(ctx, roomId);
-  const current = players.find((p) => p.color === room.currentTurn);
+  const mode = modeFromRoom(room);
+  const actorColor = turnActorColor(room.currentTurn as Color, players, mode);
+  const current = players.find((p) => p.color === actorColor);
   if (!current || !current.isBot || current.eliminated || current.finishRank != null) {
     return;
   }
@@ -145,10 +188,8 @@ async function beginTurn(
   const turnId = (room.turnId ?? 0) + 1;
   const now = Date.now();
   const players = await seatedPlayers(ctx, room._id);
-  const nextPlayer = players.find((p) => p.color === next);
-  const turnText = nextPlayer
-    ? `${nextPlayer.name}'s turn`
-    : `${next}'s turn`;
+  const mode = modeFromRoom(room);
+  const turnText = turnAnnouncement(next, players, mode);
 
   const prior =
     typeof patch.lastEvent === "string" ? patch.lastEvent : undefined;
@@ -386,7 +427,10 @@ async function applyTurnTimeout(
   room: Doc<"rooms">,
 ): Promise<void> {
   const players = await seatedPlayers(ctx, room._id);
-  const current = players.find((p) => p.color === room.currentTurn);
+  const mode = modeFromRoom(room);
+  const seat = room.currentTurn as Color;
+  const actorColor = turnActorColor(seat, players, mode);
+  const current = players.find((p) => p.color === actorColor);
   if (!current || current.eliminated || current.finishRank != null) return;
 
   const lives = (current.lives ?? MAX_TIMEOUT_LIVES) - 1;
@@ -409,12 +453,21 @@ async function applyTurnTimeout(
 
     const refreshed = await seatedPlayers(ctx, room._id);
 
-    if (await maybeFinishSoleSurvivor(ctx, room, refreshed)) return;
+    if (room.mode === "2v2") {
+      if (await maybeFinishTeamByElimination(ctx, room, refreshed, Date.now())) {
+        return;
+      }
+    } else if (await maybeFinishSoleSurvivor(ctx, room, refreshed)) {
+      return;
+    }
 
-    const seated = playableColors(refreshed);
-    if (seated.length < 2) return;
+    const pool =
+      mode === "2v2"
+        ? rotationColors(refreshed, mode)
+        : playableColors(refreshed);
+    if (pool.length < 2) return;
 
-    const next = nextColorAmong(room.currentTurn, seated);
+    const next = advanceTurnColor(seat, refreshed, mode);
     await beginTurn(ctx, room, next, {
       lastEvent: `${current.name} timed out — eliminated (0 lives)`,
     });
@@ -422,8 +475,7 @@ async function applyTurnTimeout(
   }
 
   await ctx.db.patch(current._id, { lives });
-  const seated = playableColors(players);
-  const next = nextColorAmong(room.currentTurn, seated);
+  const next = advanceTurnColor(seat, players, mode);
   await beginTurn(ctx, room, next, {
     lastEvent: `${current.name} timed out — ${lives} ${lives === 1 ? "life" : "lives"} left`,
   });
@@ -467,7 +519,10 @@ async function requireActivePlayer(
   if (player.eliminated || player.finishRank != null) {
     fail(GameError.eliminated);
   }
-  if (player.color !== room.currentTurn) fail(GameError.notYourTurn);
+  const players = await seatedPlayers(ctx, roomId);
+  const mode = modeFromRoom(room);
+  const actor = turnActorColor(room.currentTurn as Color, players, mode);
+  if (player.color !== actor) fail(GameError.notYourTurn);
   return player;
 }
 
@@ -488,6 +543,7 @@ type RollResult = {
   value: number;
   skipped: boolean;
   legalMoves: number[];
+  legalTokenMoves?: TokenMoveChoice[];
   threeSixes?: boolean;
   rollAgain?: boolean;
   /** Server auto-moved the sole legal token after this roll. */
@@ -507,10 +563,18 @@ async function executeRoll(
   if (room.diceRolled) fail(GameError.diceAlreadyRolled);
 
   const players = await seatedPlayers(ctx, roomId);
-  const seated = playableColors(players);
+  const mode = modeFromRoom(room);
   const tokens = await loadTokens(ctx, roomId);
-  const value = rollFairDice(allTokensInYard(tokens, player.color as Color));
-  const legalMoves = getLegalMoves(tokens, player.color, value);
+  const actorColor = player.color as Color;
+  const value = rollFairDice(allTokensInYard(tokens, actorColor));
+  const legalTokenMoves = getLegalMovesForActor(
+    tokens,
+    actorColor,
+    players,
+    mode,
+    value,
+  );
+  const legalMoves = legalTokenMoves.map((m) => m.index);
   const decision = decideRollOutcome(
     value,
     room.consecutiveSixes,
@@ -533,7 +597,7 @@ async function executeRoll(
       await restoreTokenSnapshot(ctx, roomId, snapshot);
     }
 
-    const next = nextColorAmong(room.currentTurn, seated);
+    const next = advanceTurnColor(room.currentTurn as Color, players, mode);
     const event = snapshot?.length
       ? `${player.name} rolled three 6s — moves undone, turn skipped`
       : `${player.name} rolled three 6s — turn skipped`;
@@ -547,6 +611,7 @@ async function executeRoll(
       skipped: true,
       threeSixes: true,
       legalMoves: [] as number[],
+      legalTokenMoves: [],
     };
   }
 
@@ -565,16 +630,22 @@ async function executeRoll(
         now,
       ),
     });
-    return { value, skipped: false, legalMoves, rollAgain: true };
+    return {
+      value,
+      skipped: false,
+      legalMoves,
+      legalTokenMoves,
+      rollAgain: true,
+    };
   }
 
   if (decision.kind === "no_moves") {
-    const next = nextColorAmong(room.currentTurn, seated);
+    const next = advanceTurnColor(room.currentTurn as Color, players, mode);
     await beginTurn(ctx, room, next, {
       diceValue: value,
       lastEvent: `${player.name} rolled ${value} — no moves`,
     });
-    return { value, skipped: true, legalMoves };
+    return { value, skipped: true, legalMoves, legalTokenMoves };
   }
 
   await ctx.db.patch(roomId, {
@@ -589,14 +660,16 @@ async function executeRoll(
   });
 
   // Exactly one legal token → server-authoritative auto-move.
-  if (legalMoves.length === 1) {
+  if (legalTokenMoves.length === 1) {
     const fresh = (await ctx.db.get(roomId))!;
+    const only = legalTokenMoves[0]!;
     const autoMove = await executeMove(
       ctx,
       roomId,
       fresh,
       player,
-      legalMoves[0]!,
+      only.color,
+      only.index,
       now,
       clientIdForLog,
     );
@@ -604,12 +677,13 @@ async function executeRoll(
       value,
       skipped: false,
       legalMoves,
+      legalTokenMoves,
       autoMoved: true,
       autoMove,
     };
   }
 
-  return { value, skipped: false, legalMoves };
+  return { value, skipped: false, legalMoves, legalTokenMoves };
 }
 
 /** Shared move logic for humans and bots. Caller must validate turn ownership. */
@@ -618,6 +692,7 @@ async function executeMove(
   roomId: Id<"rooms">,
   room: Doc<"rooms">,
   player: Doc<"players">,
+  tokenColor: Color,
   tokenIndex: number,
   now: number,
   clientIdForLog: string,
@@ -638,12 +713,24 @@ async function executeMove(
     fail(GameError.invalidDice);
   }
 
+  const players = await seatedPlayers(ctx, roomId);
+  const mode = modeFromRoom(room);
+  const actorColor = player.color as Color;
   const tokens = await loadTokens(ctx, roomId);
-  const legal = getLegalMoves(tokens, player.color, dice);
-  if (!legal.includes(tokenIndex)) {
+  const legalTokenMoves = getLegalMovesForActor(
+    tokens,
+    actorColor,
+    players,
+    mode,
+    dice,
+  );
+  const legal = legalTokenMoves.some(
+    (m) => m.color === tokenColor && m.index === tokenIndex,
+  );
+  if (!legal) {
     logEvent("rejected_move", {
       roomCode: room.code,
-      color: player.color,
+      color: tokenColor,
       tokenIndex,
       dice,
       clientId: clientIdForLog,
@@ -654,7 +741,7 @@ async function executeMove(
   const tokenList = await ctx.db
     .query("tokens")
     .withIndex("by_room_color", (q) =>
-      q.eq("roomId", roomId).eq("color", player.color),
+      q.eq("roomId", roomId).eq("color", tokenColor),
     )
     .collect();
   const tokenDoc = tokenList.find((t) => t.index === tokenIndex);
@@ -664,7 +751,8 @@ async function executeMove(
   const dest = tryMoveSteps(tokenDoc.steps, dice);
   if (dest === null) fail(GameError.illegalMove);
 
-  const captures = findCaptureTargets(tokens, player.color, dest);
+  const gameMode: GameMode = mode;
+  const captures = findCaptureTargets(tokens, tokenColor, dest, gameMode);
   if (captures.length > 0) {
     const byColor = new Map<Color, number[]>();
     for (const c of captures) {
@@ -687,7 +775,7 @@ async function executeMove(
       }
       logEvent("capture", {
         roomCode: room.code,
-        attacker: player.color,
+        attacker: tokenColor,
         victim: color,
         count: indexes.length,
         clientId: clientIdForLog,
@@ -707,7 +795,7 @@ async function executeMove(
     captures.map((c) => `${c.color}:${c.index}`),
   );
   const updatedTokens = tokens.map((t) =>
-    t.color === player.color && t.index === tokenIndex
+    t.color === tokenColor && t.index === tokenIndex
       ? { ...t, steps: dest }
       : capturedKeys.has(`${t.color}:${t.index}`)
         ? { ...t, steps: -1 }
@@ -720,7 +808,7 @@ async function executeMove(
 
   logEvent("token_moved", {
     roomCode: room.code,
-    color: player.color,
+    color: tokenColor,
     tokenIndex,
     fromSteps,
     toSteps: dest,
@@ -728,17 +816,24 @@ async function executeMove(
     clientId: clientIdForLog,
   });
 
-  if (hasWon(updatedTokens, player.color)) {
-    const rankings = await assignFinishRank(ctx, room, player);
-    const rank = rankings.indexOf(player.color as Color) + 1;
+  const tokenOwner = players.find((p) => p.color === tokenColor);
+  if (!tokenOwner) fail(GameError.illegalMove);
+
+  if (hasWon(updatedTokens, tokenColor)) {
+    const rankings = await assignFinishRank(ctx, room, tokenOwner);
+    const rank = rankings.indexOf(tokenColor) + 1;
     const isFirst = rank === 1;
+    const finishedLabel =
+      tokenOwner._id === player._id
+        ? player.name
+        : `${player.name} (${tokenOwner.name}'s tokens)`;
     const placeNote = didCapture
-      ? `${player.name} captured and finished — #${rank}!`
-      : `${player.name} finished — #${rank}!`;
+      ? `${finishedLabel} captured and finished — #${rank}!`
+      : `${finishedLabel} finished — #${rank}!`;
 
     await ctx.db.patch(roomId, {
       rankings,
-      winner: isFirst ? player.color : (room.winner ?? player.color),
+      winner: isFirst ? tokenColor : (room.winner ?? tokenColor),
       diceRolled: false,
       diceValue: dice,
       consecutiveSixes: 0,
@@ -754,6 +849,55 @@ async function executeMove(
       captured: didCapture,
       captures: captures.map((c) => ({ color: c.color, index: c.index })),
     };
+
+    if (room.mode === "2v2") {
+      if (
+        await maybeFinishTeamMatch(
+          ctx,
+          refreshedRoom,
+          refreshedPlayers,
+          updatedTokens,
+          now,
+          tokenColor,
+        )
+      ) {
+        return {
+          won: true,
+          matchOver: true,
+          rank,
+          ...captureResult,
+          reachedHome,
+          leftYard,
+          fromSteps,
+          toSteps: dest,
+        };
+      }
+
+      const next = advanceTurnColor(
+        room.currentTurn as Color,
+        refreshedPlayers,
+        mode,
+      );
+      const teammateNote =
+        tokenOwner._id !== player._id
+          ? `${tokenOwner.name} finished — ${player.name} plays their turns`
+          : `${player.name} finished — teammate plays their turns`;
+      await beginTurn(ctx, refreshedRoom, next, {
+        diceValue: dice,
+        lastEvent: `${teammateNote} (#${rank}) — game continues`,
+      });
+
+      return {
+        won: true,
+        matchOver: false,
+        rank,
+        ...captureResult,
+        reachedHome,
+        leftYard,
+        fromSteps,
+        toSteps: dest,
+      };
+    }
 
     if (await maybeFinishAutomaticLoser(ctx, refreshedRoom, refreshedPlayers, now)) {
       return {
@@ -796,11 +940,14 @@ async function executeMove(
       };
     }
 
-    // Finished players leave the rotation; remaining seats continue.
-    const next = nextColorAmong(room.currentTurn, stillPlaying);
+    const next = advanceTurnColor(
+      room.currentTurn as Color,
+      refreshedPlayers,
+      modeFromRoom(room),
+    );
     await beginTurn(ctx, refreshedRoom, next, {
       diceValue: dice,
-      lastEvent: `${player.name} is done (#${rank}) — game continues`,
+      lastEvent: `${tokenOwner.name} is done (#${rank}) — game continues`,
     });
 
     return {
@@ -815,8 +962,6 @@ async function executeMove(
     };
   }
 
-  const players = await seatedPlayers(ctx, roomId);
-  const seated = playableColors(players);
   const extraTurn = gainsExtraTurn(dice, didCapture, reachedHome);
   let capturedLabel: string | undefined;
   if (captures.length === 1) {
@@ -852,7 +997,11 @@ async function executeMove(
     await scheduleTurnTimeout(ctx, roomId, turnId);
     await maybeScheduleBotTurn(ctx, roomId, turnId);
   } else {
-    const next = nextColorAmong(room.currentTurn, seated);
+    const next = advanceTurnColor(
+      room.currentTurn as Color,
+      players,
+      mode,
+    );
     const moveText = didCapture
       ? `${player.name} captured ${capturedLabel}`
       : `${player.name} moved`;
@@ -892,10 +1041,16 @@ const moveResultValidator = v.object({
   ),
 });
 
+const tokenMoveChoiceValidator = v.object({
+  color: colorValidator,
+  index: v.number(),
+});
+
 const rollResultValidator = v.object({
   value: v.number(),
   skipped: v.boolean(),
   legalMoves: v.array(v.number()),
+  legalTokenMoves: v.optional(v.array(tokenMoveChoiceValidator)),
   threeSixes: v.optional(v.boolean()),
   rollAgain: v.optional(v.boolean()),
   autoMoved: v.optional(v.boolean()),
@@ -928,7 +1083,13 @@ export const rollDice = mutation({
     const fresh = (await ctx.db.get(args.roomId))!;
     if (fresh.diceRolled) fail(GameError.diceAlreadyRolled);
     // Re-check seat against post-timeout state (should have thrown already).
-    if (player.color !== fresh.currentTurn) fail(GameError.notYourTurn);
+    const playersAfter = await seatedPlayers(ctx, args.roomId);
+    const actor = turnActorColor(
+      fresh.currentTurn as Color,
+      playersAfter,
+      modeFromRoom(fresh),
+    );
+    if (player.color !== actor) fail(GameError.notYourTurn);
 
     const now = assertActionInterval(player.lastActionAt, ACTION_MIN_INTERVAL_MS);
     await ctx.db.patch(player._id, { lastActionAt: now });
@@ -942,6 +1103,8 @@ export const moveToken = mutation({
     roomId: v.id("rooms"),
     clientId: v.string(),
     tokenIndex: v.number(),
+    /** Mover colour (required when moving a finished teammate's token in 2v2). */
+    tokenColor: v.optional(colorValidator),
     /** Client's view of turnId — rejects stale tabs. */
     turnId: v.number(),
   },
@@ -959,20 +1122,82 @@ export const moveToken = mutation({
     await assertTurnNotExpired(ctx, room);
 
     const fresh = (await ctx.db.get(args.roomId))!;
-    if (player.color !== fresh.currentTurn) fail(GameError.notYourTurn);
+    const playersAfter = await seatedPlayers(ctx, args.roomId);
+    const actor = turnActorColor(
+      fresh.currentTurn as Color,
+      playersAfter,
+      modeFromRoom(fresh),
+    );
+    if (player.color !== actor) fail(GameError.notYourTurn);
 
     const now = assertActionInterval(player.lastActionAt, ACTION_MIN_INTERVAL_MS);
     await ctx.db.patch(player._id, { lastActionAt: now });
 
+    const moverColor = (args.tokenColor ?? player.color) as Color;
     return await executeMove(
       ctx,
       args.roomId,
       fresh,
       player,
+      moverColor,
       args.tokenIndex,
       now,
       clientId,
     );
+  },
+});
+
+export const passTurn = mutation({
+  args: {
+    roomId: v.id("rooms"),
+    clientId: v.string(),
+    turnId: v.number(),
+    targetColor: colorValidator,
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const clientId = assertValidClientId(args.clientId);
+    const room = await ctx.db.get(args.roomId);
+    if (!room) fail(GameError.roomNotFound);
+    if (room.status !== "playing") fail(GameError.gameNotPlaying);
+
+    if (modeFromRoom(room) !== "2v2") fail(GameError.passNotAllowed);
+
+    assertFreshTurn(room, args.turnId);
+
+    const player = await requireActivePlayer(ctx, args.roomId, clientId, room);
+    if (player.isBot) fail(GameError.notYourTurn);
+    await assertTurnNotExpired(ctx, room);
+
+    const fresh = (await ctx.db.get(args.roomId))!;
+    const playersAfter = await seatedPlayers(ctx, args.roomId);
+    const actor = turnActorColor(
+      fresh.currentTurn as Color,
+      playersAfter,
+      modeFromRoom(fresh),
+    );
+    if (player.color !== actor) fail(GameError.notYourTurn);
+    if (fresh.currentTurn !== player.color) fail(GameError.notYourTurn);
+
+    const teammateColor = teamTeammateColor(player.color as Color);
+    if (args.targetColor !== teammateColor) fail(GameError.invalidPassTarget);
+
+    const teammate = playersAfter.find((p) => p.color === teammateColor);
+    if (
+      !teammate ||
+      teammate.eliminated ||
+      teammate.finishRank != null
+    ) {
+      fail(GameError.invalidPassTarget);
+    }
+
+    const now = assertActionInterval(player.lastActionAt, ACTION_MIN_INTERVAL_MS);
+    await ctx.db.patch(player._id, { lastActionAt: now });
+
+    await beginTurn(ctx, fresh, teammateColor, {
+      lastEvent: `${player.name} passed the turn to ${teammate.name}`,
+    });
+    return null;
   },
 });
 
@@ -1013,7 +1238,9 @@ export const playBotTurn = internalMutation({
     if ((room.turnId ?? 0) !== args.turnId) return null;
 
     const players = await seatedPlayers(ctx, args.roomId);
-    const player = players.find((p) => p.color === room.currentTurn);
+    const mode = modeFromRoom(room);
+    const actorColor = turnActorColor(room.currentTurn as Color, players, mode);
+    const player = players.find((p) => p.color === actorColor);
     if (
       !player ||
       !player.isBot ||
@@ -1058,23 +1285,38 @@ export const playBotTurn = internalMutation({
     const dice = room.diceValue;
     if (dice === null) return null;
     const tokens = await loadTokens(ctx, args.roomId);
-    const tokenIndex = pickBotMove(tokens, player.color as Color, dice);
-    if (tokenIndex === null) {
-      // Should not happen if roll left diceRolled true; advance defensively.
-      const seated = playableColors(players);
-      const next = nextColorAmong(room.currentTurn, seated);
+    const legal = getLegalMovesForActor(
+      tokens,
+      player.color as Color,
+      players,
+      mode,
+      dice,
+    );
+    if (legal.length === 0) {
+      const next = advanceTurnColor(room.currentTurn as Color, players, mode);
       await beginTurn(ctx, room, next, {
         lastEvent: `${player.name} — no moves`,
       });
       return null;
     }
+    const pick =
+      legal.length === 1
+        ? legal[0]!
+        : (() => {
+            const idx = pickBotMove(tokens, player.color as Color, dice);
+            const fallback = legal.find(
+              (m) => m.color === player.color && m.index === idx,
+            );
+            return fallback ?? legal[0]!;
+          })();
 
     await executeMove(
       ctx,
       args.roomId,
       room,
       player,
-      tokenIndex,
+      pick.color,
+      pick.index,
       now,
       player.clientId,
     );
@@ -1087,7 +1329,7 @@ export const getLegalTokenIndexes = query({
     roomId: v.id("rooms"),
     clientId: v.string(),
   },
-  returns: v.array(v.number()),
+  returns: v.array(tokenMoveChoiceValidator),
   handler: async (ctx, args) => {
     let clientId: string;
     try {
@@ -1103,7 +1345,7 @@ export const getLegalTokenIndexes = query({
       !room.diceRolled ||
       room.diceValue === null
     ) {
-      return [] as number[];
+      return [];
     }
 
     const player = await ctx.db
@@ -1113,16 +1355,26 @@ export const getLegalTokenIndexes = query({
       )
       .unique();
 
+    const players = await seatedPlayers(ctx, args.roomId);
+    const mode = modeFromRoom(room);
+    const actor = turnActorColor(room.currentTurn as Color, players, mode);
+
     if (
       !player ||
       player.eliminated ||
       player.finishRank != null ||
-      player.color !== room.currentTurn
+      player.color !== actor
     ) {
       return [];
     }
 
     const tokens = await loadTokens(ctx, args.roomId);
-    return getLegalMoves(tokens, player.color, room.diceValue);
+    return getLegalMovesForActor(
+      tokens,
+      actor,
+      players,
+      mode,
+      room.diceValue,
+    );
   },
 });

@@ -88,6 +88,11 @@
   animation: pulse 1.1s ease-in-out infinite;
 }
 
+.passTargetRing {
+  animation: pulse 1.1s ease-in-out infinite;
+  pointer-events: none;
+}
+
 .capture {
   animation: capturePop 0.35s ease-out;
 }
@@ -145,6 +150,7 @@
 
   .selectable,
   .pulse,
+  .passTargetRing,
   .turnGlow,
   .turnRing,
   .capture,

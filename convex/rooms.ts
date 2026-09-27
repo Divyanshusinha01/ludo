@@ -11,9 +11,15 @@ import {
   MAX_TIMEOUT_LIVES,
   nextColorAmong,
   pickNextColor,
+  pickNextColorForTeam,
+  teamOfColor,
   shouldAssignAutomaticLoser,
   TURN_TIMEOUT_MS,
+  Team,
 } from "./lib/ludo";
+import {
+  maybeFinishTeamByElimination,
+} from "./lib/teams";
 import { BOT_THINK_MS, botClientId, botDisplayName } from "./lib/bot";
 import { GameError, fail } from "./lib/errors";
 import { logEvent } from "./lib/log";
@@ -82,6 +88,8 @@ function publicRoom(room: Doc<"rooms">) {
     createdAt: room.createdAt,
     finishedAt: room.finishedAt ?? null,
     vsComputer: !!room.vsComputer,
+    mode: room.mode === "2v2" ? ("2v2" as const) : ("1v1" as const),
+    winningTeam: room.winningTeam ?? null,
   };
 }
 
@@ -101,7 +109,12 @@ function publicPlayers(
     isMe: sessionId !== null && p.clientId === sessionId,
     isHost: p.clientId === room.hostClientId,
     isBot: !!p.isBot,
+    team: p.team ?? null,
   }));
+}
+
+function countOnTeam(players: Doc<"players">[], team: Team): number {
+  return players.filter((p) => p.team === team).length;
 }
 
 async function loadRoomBundle(
@@ -256,6 +269,7 @@ async function resetBoard(
     turnId,
     turnStartedAt: now,
     winner: null,
+    winningTeam: null,
     rankings: [],
     lastActivityAt: now,
     ...freshEvents([lastEvent, turnText], now),
@@ -355,12 +369,14 @@ export const createRoom = mutation({
   args: {
     clientId: v.string(),
     name: v.string(),
+    mode: v.optional(v.union(v.literal("1v1"), v.literal("2v2"))),
   },
   returns: joinResultValidator,
   handler: async (ctx, args) => {
     const clientId = assertValidClientId(args.clientId);
     const name = sanitizePlayerName(args.name);
     const now = Date.now();
+    const gameMode = args.mode === "2v2" ? "2v2" : "1v1";
 
     await assertCreateNotRateLimited(ctx, clientId, now);
 
@@ -376,6 +392,7 @@ export const createRoom = mutation({
       diceRolled: false,
       consecutiveSixes: 0,
       winner: null,
+      mode: gameMode,
       lastEvent: `${name} created the room`,
       createdAt: now,
       lastActivityAt: now,
@@ -392,6 +409,7 @@ export const createRoom = mutation({
       joinedAt: now,
       lives: MAX_TIMEOUT_LIVES,
       eliminated: false,
+      ...(gameMode === "2v2" ? { team: "A" as const } : {}),
     });
 
     logEvent("room_created", { roomCode: code, clientId });
@@ -529,6 +547,8 @@ export const addBot = mutation({
   args: {
     roomId: v.id("rooms"),
     clientId: v.string(),
+    color: v.optional(colorValidator),
+    team: v.optional(v.union(v.literal("A"), v.literal("B"))),
   },
   returns: v.object({
     color: colorValidator,
@@ -552,8 +572,35 @@ export const addBot = mutation({
     const seated = (room.seatedColors ?? seatedFromPlayers(players)) as Color[];
     if (seated.length >= 4) fail(GameError.roomFull);
 
-    const color = pickNextColor(seated);
-    if (!color) fail(GameError.roomFull);
+    const isTeamMode = room.mode === "2v2";
+    let color: Color | undefined;
+    let botTeam: Team | undefined;
+
+    if (isTeamMode) {
+      if (args.color) {
+        if (seated.includes(args.color)) fail(GameError.seatTaken);
+        color = args.color;
+        botTeam = teamOfColor(color);
+      } else if (args.team) {
+        if (countOnTeam(players, args.team) >= 2) fail(GameError.teamFull);
+        color = pickNextColorForTeam(seated, args.team);
+        botTeam = args.team;
+      } else {
+        const countA = countOnTeam(players, "A");
+        const countB = countOnTeam(players, "B");
+        if (countA >= 2 && countB >= 2) fail(GameError.roomFull);
+        const team: Team =
+          countA < countB ? "A" : countB < countA ? "B" : "A";
+        if (countOnTeam(players, team) >= 2) fail(GameError.teamFull);
+        color = pickNextColorForTeam(seated, team);
+        botTeam = team;
+      }
+      if (!color) fail(GameError.teamFull);
+    } else {
+      if (args.color && seated.includes(args.color)) fail(GameError.seatTaken);
+      color = args.color ?? pickNextColor(seated);
+      if (!color || seated.includes(color)) fail(GameError.roomFull);
+    }
 
     const botIndex = players.filter((p) => p.isBot).length;
     const name = botDisplayName(botIndex);
@@ -577,6 +624,7 @@ export const addBot = mutation({
       lives: MAX_TIMEOUT_LIVES,
       eliminated: false,
       isBot: true,
+      ...(botTeam ? { team: botTeam } : {}),
     });
 
     // Defend against rare double-insert same colour.
@@ -610,6 +658,7 @@ export const joinRoom = mutation({
     code: v.string(),
     clientId: v.string(),
     name: v.string(),
+    team: v.optional(v.union(v.literal("A"), v.literal("B"))),
   },
   returns: joinResultValidator,
   handler: async (ctx, args) => {
@@ -766,8 +815,24 @@ export const joinRoom = mutation({
     const seated = (room.seatedColors ?? seatedFromPlayers(players)) as Color[];
     if (seated.length >= 4) fail(GameError.roomFull);
 
-    const color = pickNextColor(seated);
-    if (!color) fail(GameError.roomFull);
+    const isTeamMode = room.mode === "2v2";
+    let color: Color;
+    let joinTeam: Team | undefined;
+
+    if (isTeamMode) {
+      if (!args.team) fail(GameError.teamRequired);
+      joinTeam = args.team;
+      if (countOnTeam(players, joinTeam) >= 2) {
+        fail(GameError.teamFull);
+      }
+      const teamColor = pickNextColorForTeam(seated, joinTeam);
+      if (!teamColor) fail(GameError.teamFull);
+      color = teamColor;
+    } else {
+      const next = pickNextColor(seated);
+      if (!next) fail(GameError.roomFull);
+      color = next;
+    }
 
     const nextSeated = [...seated, color];
     // OCC lock: concurrent joins both patch seatedColors; one retries.
@@ -787,6 +852,7 @@ export const joinRoom = mutation({
       joinedAt: now,
       lives: MAX_TIMEOUT_LIVES,
       eliminated: false,
+      ...(joinTeam ? { team: joinTeam } : {}),
     });
 
     // Defend against rare double-insert same colour.
@@ -1130,8 +1196,20 @@ export const leaveRoom = mutation({
         return { emptied: true };
       }
 
-      // Sole remaining active seat wins only when everyone else forfeited.
-      if (playable.length === 1 && remaining.every((p) => p._id === playable[0]!._id || p.eliminated)) {
+      if (room.mode === "2v2") {
+        if (
+          await maybeFinishTeamByElimination(ctx, room, remaining, now, {
+            seatedColors: seated,
+            ...withEvent(room, leaveText, now),
+          })
+        ) {
+          return { emptied: false };
+        }
+      } else if (
+        // Sole remaining active seat wins only when everyone else forfeited.
+        playable.length === 1 &&
+        remaining.every((p) => p._id === playable[0]!._id || p.eliminated)
+      ) {
         const sole = playable[0]!;
         const rankings = buildFinalRankings(
           room.rankings ?? [],
@@ -1168,7 +1246,7 @@ export const leaveRoom = mutation({
       }
 
       // N−1 home finishers already ranked — remaining seat is automatic loser.
-      if (shouldAssignAutomaticLoser(remaining)) {
+      if (room.mode !== "2v2" && shouldAssignAutomaticLoser(remaining)) {
         const loser = playable[0]!;
         const rankings = [...(room.rankings ?? [])];
         if (!rankings.includes(loser.color as Color)) {
@@ -1381,11 +1459,20 @@ export const startGame = mutation({
       .withIndex("by_room", (q) => q.eq("roomId", args.roomId))
       .collect();
 
-    if (players.length < 2) {
-      fail(GameError.needPlayers);
-    }
-    if (players.length > 4) {
-      fail(GameError.roomFull);
+    if (room.mode === "2v2") {
+      if (players.length !== 4) {
+        fail(GameError.needFullTeams);
+      }
+      if (countOnTeam(players, "A") !== 2 || countOnTeam(players, "B") !== 2) {
+        fail(GameError.needFullTeams);
+      }
+    } else {
+      if (players.length < 2) {
+        fail(GameError.needPlayers);
+      }
+      if (players.length > 4) {
+        fail(GameError.roomFull);
+      }
     }
 
     const activeColors = seatedFromPlayers(players);
@@ -1513,6 +1600,8 @@ const roomBundleValidator = v.union(
       createdAt: v.number(),
       finishedAt: v.union(v.number(), v.null()),
       vsComputer: v.boolean(),
+      mode: v.union(v.literal("1v1"), v.literal("2v2")),
+      winningTeam: v.union(v.literal("A"), v.literal("B"), v.null()),
     }),
     players: v.array(
       v.object({
@@ -1526,6 +1615,7 @@ const roomBundleValidator = v.union(
         isMe: v.boolean(),
         isHost: v.boolean(),
         isBot: v.boolean(),
+        team: v.union(v.literal("A"), v.literal("B"), v.null()),
       }),
     ),
     tokens: v.array(

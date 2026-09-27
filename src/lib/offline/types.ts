@@ -79,6 +79,7 @@ export function toOfflineBundle(state: OfflineGameState): OfflineBundle {
     isMe: me?.color === s.color,
     isHost: true,
     isBot: s.isBot,
+    team: null,
   }));
 
   const tokens = state.tokens.map((t) => ({
@@ -107,6 +108,8 @@ export function toOfflineBundle(state: OfflineGameState): OfflineBundle {
       createdAt: state.createdAt,
       finishedAt: state.finishedAt,
       vsComputer: false,
+      mode: "1v1" as const,
+      winningTeam: null,
     },
     players,
     tokens,

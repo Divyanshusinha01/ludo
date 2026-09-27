@@ -54,6 +54,7 @@ export function RoomClient({
   const [joinError, setJoinError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [joining, setJoining] = useState(false);
+  const [joinTeam, setJoinTeam] = useState<"A" | "B" | null>(null);
   const [offline, setOffline] = useState(false);
   const [troubleBusy, setTroubleBusy] = useState(false);
   const [pendingRequestId, setPendingRequestId] =
@@ -121,6 +122,7 @@ export function RoomClient({
     if (pendingRequestId || pendingJoinTried.current || joining) return;
     // Auto-join only in lobby; mid-game rejoin needs explicit name entry.
     if (roomStatus !== "lobby") return;
+    if (data?.room.mode === "2v2") return;
 
     const pending = takePendingJoinName();
     if (!pending) return;
@@ -161,6 +163,7 @@ export function RoomClient({
     joinRoom,
     joining,
     pendingRequestId,
+    data?.room.mode,
   ]);
 
   async function onJoin(e: FormEvent) {
@@ -179,6 +182,7 @@ export function RoomClient({
         code: roomCode,
         clientId,
         name: trimmed,
+        ...(data?.room.mode === "2v2" && joinTeam ? { team: joinTeam } : {}),
       });
       if ("pending" in result && result.pending) {
         setPendingRequestId(result.requestId);
@@ -269,15 +273,47 @@ export function RoomClient({
       return <StatusText>Joining room…</StatusText>;
     }
     const midGame = roomStatus === "playing" || roomStatus === "finished";
+    const teamMode = data?.room.mode === "2v2" && roomStatus === "lobby";
+    const teamACount =
+      data?.players.filter((p) => p.team === "A").length ?? 0;
+    const teamBCount =
+      data?.players.filter((p) => p.team === "B").length ?? 0;
     return (
       <div className={styles.center}>
         <h1>{midGame ? `Rejoin room ${roomCode}` : `Join room ${roomCode}`}</h1>
         <p>
           {midGame
             ? "Game already in progress — enter the same name you used before to request a rejoin."
-            : "Type your name to sit down."}
+            : teamMode
+              ? "Pick a team and enter your name."
+              : "Type your name to sit down."}
         </p>
         <form className={styles.joinForm} onSubmit={onJoin}>
+          {teamMode && (
+            <fieldset className={styles.field}>
+              <legend>Team</legend>
+              <label>
+                <input
+                  type="radio"
+                  name="joinTeam"
+                  checked={joinTeam === "A"}
+                  disabled={teamACount >= 2}
+                  onChange={() => setJoinTeam("A")}
+                />
+                Team A (Red & Yellow){teamACount >= 2 ? " — full" : ` (${teamACount}/2)`}
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="joinTeam"
+                  checked={joinTeam === "B"}
+                  disabled={teamBCount >= 2}
+                  onChange={() => setJoinTeam("B")}
+                />
+                Team B (Green & Blue){teamBCount >= 2 ? " — full" : ` (${teamBCount}/2)`}
+              </label>
+            </fieldset>
+          )}
           <label className={styles.field}>
             Your name
             <input
@@ -292,7 +328,12 @@ export function RoomClient({
           <Button
             type="submit"
             variant="primary"
-            disabled={joining || !name.trim() || !clientId}
+            disabled={
+              joining ||
+              !name.trim() ||
+              !clientId ||
+              (teamMode && !joinTeam)
+            }
           >
             {midGame ? "Request rejoin" : "Join game"}
           </Button>
