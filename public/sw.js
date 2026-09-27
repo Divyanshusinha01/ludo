@@ -1,4 +1,4 @@
-const CACHE_NAME = "family-ludo-v5";
+const CACHE_NAME = "family-ludo-v6";
 
 const SHELL_URLS = ["/", "/offline"];
 

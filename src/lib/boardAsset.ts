@@ -1,6 +1,12 @@
+import { FOLK_BOARD_ASSET_VERSION } from "./boardAssetVersion";
+
 /** Grid-aligned folk board art (see scripts/prepare-board-art.mjs). */
-export const FOLK_BOARD_PNG = "/images/folk-ludo-board.png";
-export const FOLK_BOARD_WEBP = "/images/folk-ludo-board.webp";
+function folkBoardUrl(path: string) {
+  return `${path}?v=${FOLK_BOARD_ASSET_VERSION}`;
+}
+
+export const FOLK_BOARD_PNG = folkBoardUrl("/images/folk-ludo-board.png");
+export const FOLK_BOARD_WEBP = folkBoardUrl("/images/folk-ludo-board.webp");
 export const FOLK_BOARD_ALT =
   "Hand-painted traditional Ludo board with deer, elephant, swan, and camel corners";
 /** Matches 15 × CELL in boardGeometry. */
