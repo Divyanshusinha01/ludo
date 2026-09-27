@@ -86,7 +86,7 @@ function resolveSource() {
     "projects",
     "c-Users-divsi-Desktop-ludo",
     "assets",
-    "c__Users_divsi_AppData_Roaming_Cursor_User_workspaceStorage_ee6ae50c042b41b8151cd8a0f47a7d9c_images_ChatGPT_Image_Sep_27__2026__07_28_22_PM-d3f3ed9c-c331-4825-a04b-2dc532c2148f.jpg",
+    "c__Users_divsi_AppData_Roaming_Cursor_User_workspaceStorage_ee6ae50c042b41b8151cd8a0f47a7d9c_images_ChatGPT_Image_Sep_27__2026__08_30_09_PM-816b82bd-abc8-4731-add9-984c7cfd7ba7.jpg",
   );
   if (fs.existsSync(cursorAsset)) return cursorAsset;
   throw new Error(
