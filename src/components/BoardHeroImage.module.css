@@ -1,0 +1,21 @@
+.wrap {
+  width: min(100%, 320px);
+  margin: 0 auto 1rem;
+  aspect-ratio: 1;
+  border-radius: 16px;
+  overflow: hidden;
+  filter: drop-shadow(0 10px 24px rgba(40, 30, 10, 0.2));
+}
+
+.img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+@media (min-width: 420px) {
+  .wrap {
+    margin-left: 0;
+    margin-right: 0;
+  }
+}

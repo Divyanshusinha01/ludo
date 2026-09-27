@@ -2,14 +2,8 @@
 
 import dynamic from "next/dynamic";
 import { useCallback, useRef, type PointerEvent } from "react";
-import {
-  CELL,
-  HOME_STRETCH,
-  SAFE_SET,
-  TRACK_CELLS,
-  tokenStackKey,
-  tokenSvgPosition,
-} from "@/lib/boardGeometry";
+import { boardArtRect, FOLK_BOARD_PNG } from "@/lib/boardAsset";
+import { CELL, tokenStackKey, tokenSvgPosition } from "@/lib/boardGeometry";
 import { useCanUse3DBoard } from "@/hooks/useCanUse3D";
 import { COLOR_HEX, type Color } from "@/lib/player";
 import { rankHouseLabel } from "../../convex/lib/ludo";
@@ -81,17 +75,6 @@ const RANK_BADGE: Record<Color, { x: number; y: number }> = {
   yellow: { x: 12 * CELL, y: 12 * CELL },
   blue: { x: 3 * CELL, y: 12 * CELL },
 };
-
-function Star({ x, y }: { x: number; y: number }) {
-  const s = 14;
-  return (
-    <path
-      d={`M ${x} ${y - s} L ${x + 4} ${y - 4} L ${x + s} ${y - 4} L ${x + 6} ${y + 2} L ${x + 10} ${y + s} L ${x} ${y + 6} L ${x - 10} ${y + s} L ${x - 6} ${y + 2} L ${x - s} ${y - 4} L ${x - 4} ${y - 4} Z`}
-      fill="#1e1810"
-      opacity={0.45}
-    />
-  );
-}
 
 function stackedPositions(tokens: BoardToken[]) {
   const groups = new Map<string, BoardToken[]>();
@@ -178,6 +161,7 @@ export function Board({
   onPassTurn,
 }: Props) {
   const size = 15 * CELL;
+  const art = boardArtRect(size);
   const positions = stackedPositions(tokens);
   const svgRef = useRef<SVGSVGElement>(null);
   const hasSelectable =
@@ -351,7 +335,14 @@ export function Board({
           </filter>
         </defs>
 
-        <rect width={size} height={size} fill="#f7f3e8" rx={24} />
+        <image
+          href={FOLK_BOARD_PNG}
+          x={art.x}
+          y={art.y}
+          width={art.width}
+          height={art.height}
+          preserveAspectRatio="xMidYMid meet"
+        />
 
         {(Object.keys(YARD_RECTS) as Color[]).map((color) => {
           const { x, y } = YARD_RECTS[color];
@@ -360,17 +351,9 @@ export function Board({
           const label =
             rank != null ? rankHouseLabel(rank, playerCount) : null;
           const isPassTarget = passTargetColor === color;
+          const badgeH = label ? 88 : 56;
           return (
             <g key={color}>
-              <rect
-                x={x * CELL}
-                y={y * CELL}
-                width={6 * CELL}
-                height={6 * CELL}
-                fill={COLOR_HEX[color]}
-                opacity={0.92}
-                aria-label={isPassTarget ? passTargetAriaLabel : undefined}
-              />
               {isPassTarget && (
                 <rect
                   x={x * CELL + 8}
@@ -382,17 +365,9 @@ export function Board({
                   strokeWidth={10}
                   rx={24}
                   className={styles.passTargetRing}
+                  aria-label={passTargetAriaLabel}
                 />
               )}
-              <rect
-                x={x * CELL + 60}
-                y={y * CELL + 60}
-                width={6 * CELL - 120}
-                height={6 * CELL - 120}
-                fill="#fff"
-                rx={20}
-                opacity={rank ? 0.92 : 1}
-              />
               {rank != null && (
                 <g
                   className={styles.rankBadge}
@@ -402,6 +377,16 @@ export function Board({
                       : `${color} finished rank ${rank}`
                   }
                 >
+                  <rect
+                    x={badge.x - 118}
+                    y={badge.y - (label ? 52 : 36)}
+                    width={236}
+                    height={badgeH}
+                    rx={16}
+                    fill="rgba(255, 252, 245, 0.88)"
+                    stroke="rgba(30, 24, 16, 0.12)"
+                    strokeWidth={2}
+                  />
                   <text
                     x={badge.x}
                     y={label ? badge.y - 18 : badge.y}
@@ -428,75 +413,6 @@ export function Board({
             </g>
           );
         })}
-
-        <rect x={6 * CELL} y={0} width={3 * CELL} height={size} fill="#fff" />
-        <rect x={0} y={6 * CELL} width={size} height={3 * CELL} fill="#fff" />
-
-        {TRACK_CELLS.map(([c, r], i) => {
-          const isStart =
-            i === 0 || i === 13 || i === 26 || i === 39;
-          const startColor: Color | null =
-            i === 0
-              ? "red"
-              : i === 13
-                ? "green"
-                : i === 26
-                  ? "yellow"
-                  : i === 39
-                    ? "blue"
-                    : null;
-          const safe = SAFE_SET.has(i);
-          return (
-            <g key={`t-${i}`}>
-              <rect
-                x={c * CELL + 2}
-                y={r * CELL + 2}
-                width={CELL - 4}
-                height={CELL - 4}
-                fill={startColor ? COLOR_HEX[startColor] : safe ? "#efe6c8" : "#fff"}
-                stroke={safe ? "#c4a35a" : "#d4cbb8"}
-                strokeWidth={safe ? 3 : 2}
-                rx={8}
-                opacity={isStart ? 0.85 : 1}
-              />
-              {safe && !isStart && (
-                <Star x={c * CELL + CELL / 2} y={r * CELL + CELL / 2} />
-              )}
-            </g>
-          );
-        })}
-
-        {(Object.keys(HOME_STRETCH) as Color[]).map((color) =>
-          HOME_STRETCH[color].map(([c, r], i) => (
-            <rect
-              key={`h-${color}-${i}`}
-              x={c * CELL + 2}
-              y={r * CELL + 2}
-              width={CELL - 4}
-              height={CELL - 4}
-              fill={COLOR_HEX[color]}
-              opacity={0.75}
-              rx={8}
-            />
-          )),
-        )}
-
-        <polygon
-          points={`${6 * CELL},${6 * CELL} ${9 * CELL},${6 * CELL} ${7.5 * CELL},${7.5 * CELL}`}
-          fill={COLOR_HEX.green}
-        />
-        <polygon
-          points={`${9 * CELL},${6 * CELL} ${9 * CELL},${9 * CELL} ${7.5 * CELL},${7.5 * CELL}`}
-          fill={COLOR_HEX.yellow}
-        />
-        <polygon
-          points={`${6 * CELL},${9 * CELL} ${9 * CELL},${9 * CELL} ${7.5 * CELL},${7.5 * CELL}`}
-          fill={COLOR_HEX.blue}
-        />
-        <polygon
-          points={`${6 * CELL},${6 * CELL} ${6 * CELL},${9 * CELL} ${7.5 * CELL},${7.5 * CELL}`}
-          fill={COLOR_HEX.red}
-        />
 
         {!use3D &&
           tokens.map((t) => {

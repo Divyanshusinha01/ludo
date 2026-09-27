@@ -1,6 +1,11 @@
-const CACHE_NAME = "family-ludo-v3";
+const CACHE_NAME = "family-ludo-v5";
 
 const SHELL_URLS = ["/", "/offline"];
+
+const BOARD_ASSETS = [
+  "/images/folk-ludo-board.png",
+  "/images/folk-ludo-board.webp",
+];
 
 /** @param {string} html */
 function extractNextAssetPaths(html) {
@@ -37,8 +42,27 @@ async function precachePathWithAssets(path) {
   }
 }
 
+async function precacheBoardAssets() {
+  const cache = await caches.open(CACHE_NAME);
+  await Promise.allSettled(
+    BOARD_ASSETS.map(async (path) => {
+      try {
+        const res = await fetch(path, { credentials: "same-origin" });
+        if (res.ok) await cache.put(path, res);
+      } catch {
+        /* offline during install */
+      }
+    }),
+  );
+}
+
 self.addEventListener("install", (event) => {
-  event.waitUntil(Promise.all(SHELL_URLS.map(precachePathWithAssets)));
+  event.waitUntil(
+    Promise.all([
+      ...SHELL_URLS.map(precachePathWithAssets),
+      precacheBoardAssets(),
+    ]),
+  );
   self.skipWaiting();
 });
 
@@ -65,6 +89,7 @@ function isCacheableAsset(url) {
   return (
     url.pathname.startsWith("/_next/") ||
     url.pathname.startsWith("/icons/") ||
+    url.pathname.startsWith("/images/") ||
     url.pathname === "/manifest.json" ||
     url.pathname.endsWith(".css") ||
     url.pathname.endsWith(".js") ||
