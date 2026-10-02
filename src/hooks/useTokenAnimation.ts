@@ -24,14 +24,20 @@ function signature(tokens: AnimToken[]) {
     .join("|");
 }
 
+/** Max track cells moved in one dice roll — snap only beyond this (reconnect backlog). */
+export const MAX_ANIMATED_MOVE_STEPS = 6;
+
+/** Board cells moved in one job (yard exit/capture counts as one hop). */
+export function moveStepDistance(from: number, to: number): number {
+  if (from === to) return 0;
+  if (from === -1 || to === -1) return 1;
+  return to - from;
+}
+
 /** Intermediate steps from `from` to `to` (exclusive of from, inclusive of to). */
 export function stepsAlongPath(from: number, to: number): number[] {
   if (from === to) return [];
-  if (from === -1) {
-    const path: number[] = [];
-    for (let s = 0; s <= to; s++) path.push(s);
-    return path;
-  }
+  if (from === -1) return [to];
   if (to === -1) return [-1];
   const path: number[] = [];
   for (let s = from + 1; s <= to; s++) path.push(s);
@@ -123,7 +129,8 @@ export function useTokenAnimation(serverTokens: AnimToken[]) {
       jobs.length > 2 ||
       jobs.some(
         (j) =>
-          j.kind === "move" && stepsAlongPath(j.from, j.to).length > 6,
+          j.kind === "move" &&
+          moveStepDistance(j.from, j.to) > MAX_ANIMATED_MOVE_STEPS,
       );
     if (shouldSnap) {
       snapToServer();

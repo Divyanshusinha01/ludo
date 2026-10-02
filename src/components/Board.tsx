@@ -2,7 +2,11 @@
 
 import dynamic from "next/dynamic";
 import { useCallback, useRef, type PointerEvent } from "react";
-import { boardArtRect, FOLK_BOARD_PNG } from "@/lib/boardAsset";
+import {
+  boardArtRect,
+  FOLK_BOARD_PNG,
+  FOLK_BOARD_WEBP,
+} from "@/lib/boardAsset";
 import { CELL, tokenStackKey, tokenSvgPosition } from "@/lib/boardGeometry";
 import { useCanUse3DBoard } from "@/hooks/useCanUse3D";
 import { COLOR_HEX, type Color } from "@/lib/player";
@@ -335,8 +339,17 @@ export function Board({
           </filter>
         </defs>
 
+        {/* SVG has no <picture>; PNG under WebP mirrors hero WebP-first fallback. */}
         <image
           href={FOLK_BOARD_PNG}
+          x={art.x}
+          y={art.y}
+          width={art.width}
+          height={art.height}
+          preserveAspectRatio="xMidYMid meet"
+        />
+        <image
+          href={FOLK_BOARD_WEBP}
           x={art.x}
           y={art.y}
           width={art.width}
