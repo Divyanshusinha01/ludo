@@ -1,13 +1,14 @@
 import { internalQuery, query } from "./_generated/server";
 import { v } from "convex/values";
 import { ludoEventValidator } from "./lib/game/eventValidators";
-import { createEmptyState, replayGame } from "./lib/game";
+import { createEmptyState, replayWithTrace } from "./lib/game";
 import { gameStateDiffSummary, loadGameState } from "./lib/gameStore";
 import { requirePlayer } from "./lib/roomAuth";
 import type { LudoEvent } from "./lib/game/eventValidators";
 
+/** Drop document metadata and the private session id before returning an event. */
 function stripServerFields(row: LudoEvent & { _id: string; _creationTime: number; actorClientId?: string }): LudoEvent {
-  const { actorClientId: _omit, ...rest } = row;
+  const { _id: _id, _creationTime: _ct, actorClientId: _omit, ...rest } = row;
   return rest as LudoEvent;
 }
 
@@ -29,13 +30,12 @@ export const listEvents = query({
 
     const rows = await ctx.db
       .query("gameEvents")
-      .withIndex("by_game_seq", (q) => q.eq("gameId", args.roomId))
-      .collect();
-    const filtered = rows
-      .filter((r) => r.seq > afterSeq)
-      .sort((a, b) => a.seq - b.seq);
-    const page = filtered.slice(0, limit);
-    const hasMore = filtered.length > limit;
+      .withIndex("by_game_seq", (q) =>
+        q.eq("gameId", args.roomId).gt("seq", afterSeq),
+      )
+      .take(limit + 1);
+    const page = rows.slice(0, limit);
+    const hasMore = rows.length > limit;
     const events = page.map((row) => stripServerFields(row as LudoEvent & { _id: string; _creationTime: number; actorClientId?: string }));
     const nextAfterSeq = hasMore ? (page[page.length - 1]?.seq ?? null) : null;
 
@@ -65,18 +65,22 @@ export const verifyReplay = internalQuery({
       .collect();
 
     const materialized = await loadGameState(ctx, room);
-    let replayed;
-    try {
-      replayed = replayGame(createEmptyState(), events).state;
-    } catch (e) {
+    const trace = replayWithTrace(createEmptyState(), events);
+    if (trace.error) {
+      const { seq, eventType, reason } = trace.error;
       return {
         ok: false,
         headSeq: room.eventSeq,
-        diffs: [e instanceof Error ? e.message : "replay failed"],
+        diffs: [`replay failed at seq ${seq} (${eventType}): ${reason}`],
       };
     }
+    const replayed = trace.states[trace.states.length - 1]!;
 
     const diffs = gameStateDiffSummary(materialized, replayed);
+    const tailSeq = events.at(-1)?.seq ?? 0;
+    if (tailSeq !== room.eventSeq) {
+      diffs.unshift(`log ends at seq ${tailSeq} but the room head is ${room.eventSeq}`);
+    }
     return {
       ok: diffs.length === 0,
       headSeq: room.eventSeq,

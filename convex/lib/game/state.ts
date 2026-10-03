@@ -36,7 +36,11 @@ export type SettleMarker =
       fromSteps: number;
       toSteps: number;
       wasDelegated: boolean;
-    };
+      /** TOKEN_CAPTURED events applied for this move so far. */
+      captures: number;
+    }
+  /** Between TURN_ENDED and the TURN_STARTED that must follow it. */
+  | { kind: "turn_ended" };
 
 export type GameState = {
   phase: GamePhase;

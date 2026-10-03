@@ -235,12 +235,23 @@ export function applyGameFinishedReason(
     if (!rankings.includes(s.color)) rankings.push(s.color);
   }
 
+  if (reason === "team_eliminated" && !winningTeam) {
+    const players = teamPlayers(state);
+    winningTeam =
+      (["A", "B"] as Team[]).find(
+        (team) => !teamIsSpent(players, team) && teamIsSpent(players, team === "A" ? "B" : "A"),
+      ) ?? null;
+  }
+
   if (reason === "team_home" || reason === "team_eliminated") {
     if (winningTeam) {
-      winner =
-        winner ??
-        pickRepresentativeColor(teamPlayers(state), winningTeam);
-      rankings = buildTeamRankings(winningTeam, winner);
+      const team = winningTeam;
+      if (!winner || teamOfColor(winner) !== team) {
+        winner =
+          state.rankings.find((c) => teamOfColor(c) === team) ??
+          pickRepresentativeColor(teamPlayers(state), team);
+      }
+      rankings = buildTeamRankings(team, winner);
     }
   }
 

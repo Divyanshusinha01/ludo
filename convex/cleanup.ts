@@ -1,8 +1,8 @@
 import { internalMutation, MutationCtx } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
-import { buildFinalRankings, Color } from "./lib/ludo";
-import { withEvent } from "./lib/events";
+import { Color } from "./lib/ludo";
 import { logEvent } from "./lib/log";
+import { commitCommand, loadGameState } from "./lib/gameStore";
 import { clearChatForRoom, clearVoiceForRoom, deleteRoomCascade } from "./lib/roomAuth";
 
 /** Mark away if no heartbeat within this window. */
@@ -144,32 +144,14 @@ export const tick = internalMutation({
       const connected = refreshed.filter((p) => p.connected && !p.isBot);
       // Only auto-crown when exactly one human is still connected.
       // If everyone is offline, wait for abandon/idle TTL so reconnects can resume.
-      if (connected.length === 1 && refreshed.filter((p) => !p.isBot).length >= 2) {
-        const newestSeen = refreshed.reduce(
-          (max, p) => Math.max(max, p.lastSeenAt),
-          0,
-        );
-        if (now - newestSeen > UNDERPOPULATED_MS) {
-          const sole = connected[0]!;
-          const rankings = buildFinalRankings(
-            room.rankings ?? [],
-            sole.color as Color,
-            refreshed.map((p) => ({
-              color: p.color as Color,
-              finishRank: p.finishRank ?? (p.connected ? null : 999),
-            })),
-          );
-          await ctx.db.patch(sole._id, {
-            finishRank: rankings.indexOf(sole.color as Color) + 1,
-          });
-          await ctx.db.patch(room._id, {
-            status: "finished",
-            winner: sole.color as Color,
-            rankings,
-            finishedAt: now,
-            diceRolled: false,
-            ...withEvent(room, `${sole.name} wins — others left`, now),
-          });
+      if (connected.length === 1 && humans.length >= 2) {
+        // Grace runs from the last heartbeat of any other human; the sole
+        // connected human is always recent and must not reset it.
+        const othersNewestSeen = humans
+          .filter((p) => p._id !== connected[0]!._id)
+          .reduce((max, p) => Math.max(max, p.lastSeenAt), 0);
+        if (now - othersNewestSeen > UNDERPOPULATED_MS) {
+          await crownSoleConnected(ctx, room._id, connected[0]!.color as Color, now);
           continue;
         }
       }
@@ -182,4 +164,31 @@ export const tick = internalMutation({
     }
   },
 });
+
+/**
+ * End an underpopulated match: every other seat still in play forfeits as
+ * abandoned, so the reducer crowns the sole connected human.
+ */
+async function crownSoleConnected(
+  ctx: MutationCtx,
+  roomId: Id<"rooms">,
+  sole: Color,
+  now: number,
+): Promise<void> {
+  for (;;) {
+    const room = await ctx.db.get(roomId);
+    if (!room || room.status !== "playing" || room.eventSeq === undefined) return;
+    const state = await loadGameState(ctx, room);
+    const target = state.seats.find(
+      (s) => s.color !== sole && !s.eliminated && s.finishRank == null,
+    );
+    if (!target) return;
+    await commitCommand(
+      ctx,
+      room,
+      { type: "ForfeitSeat", color: target.color, reason: "abandoned" },
+      { now },
+    );
+  }
+}
 

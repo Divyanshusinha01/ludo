@@ -17,9 +17,6 @@ import {
   TURN_TIMEOUT_MS,
   Team,
 } from "./lib/ludo";
-import {
-  maybeFinishTeamByElimination,
-} from "./lib/teams";
 import { BOT_THINK_MS, botClientId, botDisplayName } from "./lib/bot";
 import { GameError, fail } from "./lib/errors";
 import { logEvent } from "./lib/log";
@@ -42,6 +39,7 @@ import {
   requirePlayer,
 } from "./lib/roomAuth";
 import {
+  commitCommand,
   commitEventsBootstrap,
   commitEvents,
   assertEventSourcedRoom,
@@ -173,13 +171,53 @@ async function loadRoomBundle(
   };
 }
 
-function seatedFromPlayers(players: Doc<"players">[]): Color[] {
+function seatedFromPlayers(players: Array<Pick<Doc<"players">, "color">>): Color[] {
   return COLORS.filter((c) => players.some((p) => p.color === c)) as Color[];
+}
+
+type SeatSource = Pick<Doc<"players">, "color" | "name" | "isBot" | "team">;
+
+function seatSnapshot(p: SeatSource) {
+  return {
+    color: p.color as Color,
+    name: p.name,
+    isBot: !!p.isBot,
+    ...(p.team ? { team: p.team } : {}),
+  };
+}
+
+function playerJoinedDraft(
+  roomId: Id<"rooms">,
+  p: SeatSource,
+  now: number,
+): LudoEventDraft {
+  return {
+    gameId: roomId,
+    createdAt: now,
+    actor: { kind: "seat", color: p.color as Color },
+    eventType: "PLAYER_JOINED",
+    payload: { seat: seatSnapshot(p) },
+  };
+}
+
+function playerLeftDraft(
+  roomId: Id<"rooms">,
+  color: Color,
+  reason: "left" | "kicked",
+  now: number,
+): LudoEventDraft {
+  return {
+    gameId: roomId,
+    createdAt: now,
+    actor: reason === "left" ? { kind: "seat", color } : { kind: "system" },
+    eventType: "PLAYER_LEFT",
+    payload: { color, reason },
+  };
 }
 
 function buildMatchStartDrafts(
   room: Doc<"rooms">,
-  players: Doc<"players">[],
+  players: SeatSource[],
   now: number,
 ): LudoEventDraft[] {
   const mode = room.mode === "2v2" ? "2v2" : "1v1";
@@ -221,7 +259,7 @@ function pickNextHumanHost(
   players: Doc<"players">[],
 ): Doc<"players"> | null {
   const humans = players
-    .filter((p) => !p.isBot && !p.eliminated)
+    .filter((p) => !p.isBot && !p.eliminated && p.leftAt === undefined)
     .sort((a, b) => COLORS.indexOf(a.color) - COLORS.indexOf(b.color));
   return humans[0] ?? null;
 }
@@ -230,83 +268,6 @@ function playableHumans(players: Doc<"players">[]): Doc<"players">[] {
   return players.filter(
     (p) => !p.isBot && !p.eliminated && p.finishRank == null,
   );
-}
-
-async function resetBoard(
-  ctx: MutationCtx,
-  roomId: Id<"rooms">,
-  activeColors: Color[],
-  lastEvent: string,
-  now: number,
-) {
-  const existingTokens = await ctx.db
-    .query("tokens")
-    .withIndex("by_room", (q) => q.eq("roomId", roomId))
-    .collect();
-  await Promise.all(existingTokens.map((t) => ctx.db.delete(t._id)));
-
-  await Promise.all(
-    createInitialTokens(activeColors).map((token) =>
-      ctx.db.insert("tokens", {
-        roomId,
-        color: token.color,
-        index: token.index,
-        steps: token.steps,
-      }),
-    ),
-  );
-
-  const firstTurn = activeColors[0]!;
-  const turnId = 1;
-
-  // Players still have old finish state until patched below; names/colors are fine.
-  const playersForNames = await ctx.db
-    .query("players")
-    .withIndex("by_room", (q) => q.eq("roomId", roomId))
-    .collect();
-  const firstPlayer = playersForNames.find((p) => p.color === firstTurn);
-  const turnText = firstPlayer
-    ? `${firstPlayer.name}'s turn`
-    : `${firstTurn}'s turn`;
-
-  await ctx.db.patch(roomId, {
-    status: "playing",
-    currentTurn: firstTurn,
-    diceValue: null,
-    diceRolled: false,
-    passedRollTo: null,
-    consecutiveSixes: 0,
-    lastMovedTokenIndex: null,
-    sixStreakSnapshot: null,
-    turnId,
-    turnStartedAt: now,
-    winner: null,
-    winningTeam: null,
-    rankings: [],
-    lastActivityAt: now,
-    ...freshEvents([lastEvent, turnText], now),
-  });
-
-  const players = playersForNames;
-  await Promise.all(
-    players.map((p) =>
-      ctx.db.patch(p._id, {
-        lives: MAX_TIMEOUT_LIVES,
-        eliminated: false,
-        finishRank: undefined,
-      }),
-    ),
-  );
-
-  await ctx.scheduler.runAfter(TURN_TIMEOUT_MS, internal.game.handleTurnTimeout, {
-    roomId,
-    turnId,
-  });
-  // Bots act after a short delay (no-op when the current seat is human).
-  await ctx.scheduler.runAfter(BOT_THINK_MS, internal.game.playBotTurn, {
-    roomId,
-    turnId,
-  });
 }
 
 const joinResultValidator = v.union(
@@ -331,12 +292,11 @@ async function claimDisconnectedSeat(
   seat: Doc<"players">,
   room: Doc<"rooms">,
   clientId: string,
-  name: string,
   now: number,
 ) {
+  // The seat keeps its name: names are part of the event-sourced seat snapshot.
   await ctx.db.patch(seat._id, {
     clientId,
-    name,
     connected: true,
     lastSeenAt: now,
   });
@@ -413,6 +373,35 @@ export const createRoom = mutation({
       rulesVersion: CURRENT_RULES_VERSION,
     });
 
+    const hostSeat = {
+      color,
+      name,
+      isBot: false,
+      ...(gameMode === "2v2" ? { team: "A" as const } : {}),
+    };
+    // Commit before seating: the projection is read from player rows, so the
+    // reducer must see the lobby as it was before this seat existed.
+    await commitEventsBootstrap(
+      ctx,
+      roomId,
+      [
+        {
+          gameId: roomId,
+          createdAt: now,
+          actor: { kind: "system" },
+          eventType: "GAME_CREATED",
+          payload: {
+            mode: gameMode,
+            vsComputer: false,
+            rulesVersion: CURRENT_RULES_VERSION,
+            host: hostSeat,
+          },
+        },
+        playerJoinedDraft(roomId, hostSeat, now),
+      ],
+      { now, actorClientId: clientId },
+    );
+
     await ctx.db.insert("players", {
       roomId,
       clientId,
@@ -424,38 +413,6 @@ export const createRoom = mutation({
       lives: MAX_TIMEOUT_LIVES,
       eliminated: false,
       ...(gameMode === "2v2" ? { team: "A" as const } : {}),
-    });
-
-    const hostSeat = {
-      color,
-      name,
-      isBot: false,
-      ...(gameMode === "2v2" ? { team: "A" as const } : {}),
-    };
-    const bootstrap: LudoEventDraft[] = [
-      {
-        gameId: roomId,
-        createdAt: now,
-        actor: { kind: "system" },
-        eventType: "GAME_CREATED",
-        payload: {
-          mode: gameMode,
-          vsComputer: false,
-          rulesVersion: CURRENT_RULES_VERSION,
-          host: hostSeat,
-        },
-      },
-      {
-        gameId: roomId,
-        createdAt: now,
-        actor: { kind: "seat", color },
-        eventType: "PLAYER_JOINED",
-        payload: { seat: hostSeat },
-      },
-    ];
-    await commitEventsBootstrap(ctx, roomId, bootstrap, {
-      now,
-      actorClientId: clientId,
     });
 
     logEvent("room_created", { roomCode: code, clientId });
@@ -500,7 +457,6 @@ export const createVsComputer = mutation({
           .unique();
         if (hostPlayer) {
           await ctx.db.patch(hostPlayer._id, {
-            name,
             connected: true,
             lastSeenAt: now,
           });
@@ -537,84 +493,57 @@ export const createVsComputer = mutation({
       rulesVersion: CURRENT_RULES_VERSION,
     });
 
-    await ctx.db.insert("players", {
-      roomId,
-      clientId,
-      name,
-      color: hostColor,
-      connected: true,
-      lastSeenAt: now,
-      joinedAt: now,
-      lives: MAX_TIMEOUT_LIVES,
-      eliminated: false,
-      isBot: false,
-    });
-
-    const seated: Color[] = [hostColor];
-    const botInserts: Promise<Id<"players">>[] = [];
-    for (let i = 0; i < botCount; i++) {
-      const color = pickNextColor(seated);
-      if (!color) break;
-      seated.push(color);
-      botInserts.push(
-        ctx.db.insert("players", {
-          roomId,
-          clientId: botClientId(roomId, color),
-          name: botDisplayName(i),
-          color,
-          connected: true,
-          lastSeenAt: now,
-          joinedAt: now,
-          lives: MAX_TIMEOUT_LIVES,
-          eliminated: false,
-          isBot: true,
-        }),
-      );
-    }
-    await Promise.all(botInserts);
-
-    const allPlayers = await ctx.db
-      .query("players")
-      .withIndex("by_room", (q) => q.eq("roomId", roomId))
-      .collect();
-    const roomDoc = (await ctx.db.get(roomId))!;
-    const vsDrafts: LudoEventDraft[] = [
-      {
-        gameId: roomId,
-        createdAt: now,
-        actor: { kind: "system" },
-        eventType: "GAME_CREATED",
-        payload: {
-          mode: "1v1",
-          vsComputer: true,
-          rulesVersion: CURRENT_RULES_VERSION,
-          host: {
-            color: hostColor,
-            name,
-            isBot: false,
-          },
-        },
-      },
-      ...allPlayers.map((p) => ({
-        gameId: roomId,
-        createdAt: now,
-        actor: { kind: "seat" as const, color: p.color as Color },
-        eventType: "PLAYER_JOINED" as const,
-        payload: {
-          seat: {
-            color: p.color as Color,
-            name: p.name,
-            isBot: !!p.isBot,
-          },
-        },
-      })),
-      ...buildMatchStartDrafts(roomDoc, allPlayers, now),
+    const seats: Array<SeatSource & { clientId: string }> = [
+      { color: hostColor, name, isBot: false, clientId },
     ];
-    await commitEventsBootstrap(ctx, roomId, vsDrafts, {
-      now,
-      actorClientId: clientId,
-    });
-    await ctx.db.patch(roomId, { seatedColors: seated, status: "playing" });
+    for (let i = 0; i < botCount; i++) {
+      const color = pickNextColor(seats.map((s) => s.color as Color));
+      if (!color) break;
+      seats.push({
+        color,
+        name: botDisplayName(i),
+        isBot: true,
+        clientId: botClientId(roomId, color),
+      });
+    }
+
+    const roomDoc = (await ctx.db.get(roomId))!;
+    await commitEventsBootstrap(
+      ctx,
+      roomId,
+      [
+        {
+          gameId: roomId,
+          createdAt: now,
+          actor: { kind: "system" },
+          eventType: "GAME_CREATED",
+          payload: {
+            mode: "1v1",
+            vsComputer: true,
+            rulesVersion: CURRENT_RULES_VERSION,
+            host: seatSnapshot(seats[0]!),
+          },
+        },
+        ...seats.map((s) => playerJoinedDraft(roomId, s, now)),
+        ...buildMatchStartDrafts(roomDoc, seats, now),
+      ],
+      { now, actorClientId: clientId },
+    );
+
+    for (const s of seats) {
+      await ctx.db.insert("players", {
+        roomId,
+        clientId: s.clientId,
+        name: s.name,
+        color: s.color,
+        connected: true,
+        lastSeenAt: now,
+        joinedAt: now,
+        lives: MAX_TIMEOUT_LIVES,
+        eliminated: false,
+        isBot: !!s.isBot,
+      });
+    }
 
     logEvent("vs_computer_created", {
       roomCode: code,
@@ -695,6 +624,14 @@ export const addBot = mutation({
       lastEvent: `${name} joined`,
     });
 
+    assertEventSourcedRoom(room);
+    await commitEvents(
+      ctx,
+      room,
+      [playerJoinedDraft(room._id, { color, name, isBot: true, team: botTeam }, now)],
+      { now, actorClientId: clientId },
+    );
+
     await ctx.db.insert("players", {
       roomId: args.roomId,
       clientId: botClientId(args.roomId, color),
@@ -767,7 +704,7 @@ export const joinRoom = mutation({
       await ctx.db.patch(existing._id, {
         connected: true,
         lastSeenAt: now,
-        name,
+        leftAt: undefined,
       });
       await ctx.db.patch(room._id, { lastActivityAt: now });
       logEvent("player_reconnected", {
@@ -817,14 +754,7 @@ export const joinRoom = mutation({
       // and cannot approve themselves) — reclaim immediately.
       const reclaimingHost = room.hostClientId === nameMatch.clientId;
       if (otherConnectedHumans.length === 0 || reclaimingHost) {
-        return await claimDisconnectedSeat(
-          ctx,
-          nameMatch,
-          room,
-          clientId,
-          name,
-          now,
-        );
+        return await claimDisconnectedSeat(ctx, nameMatch, room, clientId, now);
       }
 
       // Reuse an existing pending request from this client for this seat.
@@ -923,6 +853,14 @@ export const joinRoom = mutation({
       lastActivityAt: now,
       lastEvent: `${name} joined as ${color}`,
     });
+
+    assertEventSourcedRoom(room);
+    await commitEvents(
+      ctx,
+      room,
+      [playerJoinedDraft(room._id, { color, name, isBot: false, team: joinTeam }, now)],
+      { now, actorClientId: clientId },
+    );
 
     await ctx.db.insert("players", {
       roomId: room._id,
@@ -1151,14 +1089,7 @@ export const respondRejoinRequest = mutation({
       fail(GameError.nameTaken);
     }
 
-    await claimDisconnectedSeat(
-      ctx,
-      seat,
-      room,
-      req.requesterClientId,
-      req.requesterName,
-      now,
-    );
+    await claimDisconnectedSeat(ctx, seat, room, req.requesterClientId, now);
     await ctx.db.patch(room._id, {
       lastEvent: `${req.requesterName} rejoined as ${seat.color}`,
     });
@@ -1206,262 +1137,65 @@ export const leaveRoom = mutation({
       return { emptied: true };
     }
 
+    const others = (
+      await ctx.db
+        .query("players")
+        .withIndex("by_room", (q) => q.eq("roomId", args.roomId))
+        .collect()
+    ).filter((p) => p._id !== player._id);
+
     if (room.status === "playing") {
-      // Forfeit: keep the seat so final rankings can show their name last.
-      const color = player.color as Color;
-      if (player.eliminated) {
-        await ctx.db.delete(player._id);
-        return { emptied: false };
-      }
-
-      const allPlayers = await ctx.db
-        .query("players")
-        .withIndex("by_room", (q) => q.eq("roomId", args.roomId))
-        .collect();
-      const playableBefore = allPlayers.filter(
-        (p) => !p.eliminated && p.finishRank == null,
-      );
-      const place =
-        (room.rankings?.length ?? 0) + playableBefore.length; // later leavers get worse ranks after finishers
-
-      await ctx.db.patch(player._id, {
-        eliminated: true,
-        connected: false,
-        lives: 0,
-        finishRank: place,
-        lastSeenAt: now,
-      });
-
-      const tokens = await ctx.db
-        .query("tokens")
-        .withIndex("by_room_color", (q) =>
-          q.eq("roomId", args.roomId).eq("color", color),
-        )
-        .collect();
-      for (const t of tokens) await ctx.db.delete(t._id);
-
-      const remaining = await ctx.db
-        .query("players")
-        .withIndex("by_room", (q) => q.eq("roomId", args.roomId))
-        .collect();
-      const playable = remaining.filter(
-        (p) => !p.eliminated && p.finishRank == null,
-      );
-      const stillSeated = remaining.filter((p) => !p.eliminated);
-      const seated = seatedFromPlayers(remaining);
-      const leaveText = `${player.name} left the game`;
-      const patches: Record<string, unknown> = {
-        seatedColors: seated,
-        lastActivityAt: now,
-        ...withEvent(room, leaveText, now),
-      };
-
       // No playable humans left — tear down (bots must not finish alone).
-      if (playableHumans(remaining).length === 0) {
+      if (playableHumans(others).length === 0) {
         await deleteRoomCascade(ctx, args.roomId);
         return { emptied: true };
       }
-
-      const hostStillSeated = remaining.some(
-        (p) =>
-          p.clientId === room.hostClientId &&
-          !p.eliminated &&
-          !p.isBot,
-      );
-      if (!hostStillSeated) {
-        const nextHost = pickNextHumanHost(stillSeated);
-        if (nextHost) patches.hostClientId = nextHost.clientId;
+      // Active seats forfeit; finished or eliminated seats keep their place.
+      if (!player.eliminated && player.finishRank == null) {
+        await commitCommand(
+          ctx,
+          room,
+          { type: "ForfeitSeat", color: player.color as Color, reason: "left" },
+          { now, actorClientId: clientId },
+        );
       }
-
-      if (stillSeated.length === 0) {
-        await deleteRoomCascade(ctx, args.roomId);
-        return { emptied: true };
+      // Keep the row: the seat stays in the game state and final rankings.
+      await ctx.db.patch(player._id, { connected: false, lastSeenAt: now, leftAt: now });
+      if (room.hostClientId === clientId) {
+        const nextHost = pickNextHumanHost(others);
+        if (nextHost) await ctx.db.patch(room._id, { hostClientId: nextHost.clientId });
       }
-
-      if (room.mode === "2v2") {
-        if (
-          await maybeFinishTeamByElimination(ctx, room, remaining, now, {
-            seatedColors: seated,
-            ...withEvent(room, leaveText, now),
-          })
-        ) {
-          return { emptied: false };
-        }
-      } else if (
-        // Sole remaining active seat wins only when everyone else forfeited.
-        playable.length === 1 &&
-        remaining.every((p) => p._id === playable[0]!._id || p.eliminated)
-      ) {
-        const sole = playable[0]!;
-        const rankings = buildFinalRankings(
-          room.rankings ?? [],
-          sole.color as Color,
-          remaining.map((p) => ({
-            color: p.color as Color,
-            finishRank: p.finishRank,
-          })),
-        );
-        await ctx.db.patch(sole._id, {
-          finishRank: rankings.indexOf(sole.color as Color) + 1,
-        });
-        patches.status = "finished";
-        patches.winner = sole.color;
-        patches.finishedAt = now;
-        patches.diceRolled = false;
-        patches.rankings = rankings;
-        patches.sixStreakSnapshot = null;
-        Object.assign(
-          patches,
-          withEvents(
-            room,
-            [leaveText, `${sole.name} wins — ${player.name} left`],
-            now,
-          ),
-        );
-        await ctx.db.patch(args.roomId, patches);
-        logEvent("game_finished", {
-          roomCode: room.code,
-          winner: sole.color,
-          reason: "forfeit",
-        });
-        return { emptied: false };
-      }
-
-      // N−1 home finishers already ranked — remaining seat is automatic loser.
-      if (room.mode !== "2v2" && shouldAssignAutomaticLoser(remaining)) {
-        const loser = playable[0]!;
-        const rankings = [...(room.rankings ?? [])];
-        if (!rankings.includes(loser.color as Color)) {
-          rankings.push(loser.color as Color);
-        }
-        for (const p of remaining) {
-          if (!rankings.includes(p.color as Color)) {
-            rankings.push(p.color as Color);
-          }
-        }
-        const loserRank = rankings.indexOf(loser.color as Color) + 1;
-        await ctx.db.patch(loser._id, { finishRank: loserRank });
-        patches.status = "finished";
-        patches.winner = rankings[0] ?? room.winner;
-        patches.finishedAt = now;
-        patches.diceRolled = false;
-        patches.rankings = rankings;
-        patches.sixStreakSnapshot = null;
-        Object.assign(
-          patches,
-          withEvents(
-            room,
-            [leaveText, `${loser.name} places #${loserRank} — match over`],
-            now,
-          ),
-        );
-        await ctx.db.patch(args.roomId, patches);
-        logEvent("game_finished", {
-          roomCode: room.code,
-          winner: rankings[0] ?? null,
-          reason: "automatic_loser",
-        });
-        return { emptied: false };
-      }
-
-      // Everyone finished or left — close the match.
-      if (playable.length === 0) {
-        const rankings =
-          (room.rankings ?? []).length > 0
-            ? [...(room.rankings ?? [])]
-            : remaining
-                .filter((p) => p.finishRank != null)
-                .sort(
-                  (a, b) => (a.finishRank ?? 99) - (b.finishRank ?? 99),
-                )
-                .map((p) => p.color as Color);
-        for (const p of remaining) {
-          if (!rankings.includes(p.color as Color)) {
-            rankings.push(p.color as Color);
-          }
-        }
-        patches.status = "finished";
-        patches.winner = rankings[0] ?? room.winner;
-        patches.finishedAt = now;
-        patches.diceRolled = false;
-        patches.rankings = rankings;
-        patches.sixStreakSnapshot = null;
-        Object.assign(
-          patches,
-          withEvents(room, [leaveText, "Match complete"], now),
-        );
-        await ctx.db.patch(args.roomId, patches);
-        return { emptied: false };
-      }
-
-      if (
-        room.currentTurn === color ||
-        !playable.some((p) => p.color === room.currentTurn)
-      ) {
-        const nextTurn = nextColorAmong(
-          color,
-          playable.map((p) => p.color as Color),
-        );
-        const turnId = (room.turnId ?? 0) + 1;
-        const nextPlayer = playable.find((p) => p.color === nextTurn);
-        const turnText = nextPlayer
-          ? `${nextPlayer.name}'s turn`
-          : `${nextTurn}'s turn`;
-        patches.currentTurn = nextTurn;
-        patches.diceRolled = false;
-        patches.diceValue = null;
-        patches.consecutiveSixes = 0;
-        patches.turnId = turnId;
-        patches.turnStartedAt = now;
-        patches.lastMovedTokenIndex = null;
-        patches.sixStreakSnapshot = null;
-        Object.assign(
-          patches,
-          withEvents(room, [leaveText, turnText], now),
-        );
-
-        await ctx.db.patch(args.roomId, patches);
-        await ctx.scheduler.runAfter(
-          TURN_TIMEOUT_MS,
-          internal.game.handleTurnTimeout,
-          { roomId: args.roomId, turnId },
-        );
-        await ctx.scheduler.runAfter(BOT_THINK_MS, internal.game.playBotTurn, {
-          roomId: args.roomId,
-          turnId,
-        });
-        return { emptied: false };
-      }
-
-      await ctx.db.patch(args.roomId, patches);
       return { emptied: false };
     }
 
-    await ctx.db.delete(player._id);
-
-    const remaining = await ctx.db
-      .query("players")
-      .withIndex("by_room", (q) => q.eq("roomId", args.roomId))
-      .collect();
-
-    if (remaining.length === 0 || !remaining.some((p) => !p.isBot)) {
+    if (!others.some((p) => !p.isBot && p.leftAt === undefined)) {
       await deleteRoomCascade(ctx, args.roomId);
       return { emptied: true };
     }
 
-    const seated = seatedFromPlayers(remaining);
     const patches: {
       hostClientId?: string;
       lastEvent: string;
-      seatedColors: Color[];
       lastActivityAt: number;
     } = {
       lastEvent: `${player.name} left`,
-      seatedColors: seated,
       lastActivityAt: now,
     };
+    if (room.status === "lobby") {
+      assertEventSourcedRoom(room);
+      await commitEvents(
+        ctx,
+        room,
+        [playerLeftDraft(room._id, player.color as Color, "left", now)],
+        { now, actorClientId: clientId },
+      );
+      await ctx.db.delete(player._id);
+    } else {
+      // Finished: the seat stays in the final standings.
+      await ctx.db.patch(player._id, { connected: false, lastSeenAt: now, leftAt: now });
+    }
     if (room.hostClientId === clientId) {
-      const nextHost = pickNextHumanHost(remaining);
+      const nextHost = pickNextHumanHost(others);
       if (nextHost) {
         patches.hostClientId = nextHost.clientId;
         patches.lastEvent = `${player.name} left — ${nextHost.name} is host`;
@@ -1501,15 +1235,18 @@ export const kickPlayer = mutation({
       fail(GameError.onlyHost);
     }
 
+    const now = Date.now();
     await clearVoiceForColor(ctx, args.roomId, target.color as Color);
+    assertEventSourcedRoom(room);
+    await commitEvents(
+      ctx,
+      room,
+      [playerLeftDraft(room._id, target.color as Color, "kicked", now)],
+      { now, actorClientId: clientId },
+    );
     await ctx.db.delete(target._id);
-    const remaining = await ctx.db
-      .query("players")
-      .withIndex("by_room", (q) => q.eq("roomId", args.roomId))
-      .collect();
     await ctx.db.patch(args.roomId, {
-      seatedColors: seatedFromPlayers(remaining),
-      lastActivityAt: Date.now(),
+      lastActivityAt: now,
       lastEvent: `${target.name} was removed`,
     });
     logEvent("player_kicked", {
@@ -1605,7 +1342,8 @@ export const rematch = mutation({
     // Keep bots — they never "go away".
     for (const p of players) {
       if (p.isBot) continue;
-      const forfeitGone = !!p.eliminated && !p.connected;
+      const forfeitGone =
+        p.leftAt !== undefined || (!!p.eliminated && !p.connected);
       const staleAway = !p.connected && now - p.lastSeenAt > STALE_SEAT_MS;
       if (forfeitGone || staleAway) {
         await ctx.db.delete(p._id);

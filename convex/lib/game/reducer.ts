@@ -1,36 +1,40 @@
 import {
   Color,
+  COLORS,
   decideRollOutcome,
   findCaptureTargets,
   FINISHED_STEPS,
   gainsExtraTurn,
   getLegalMovesForActor,
+  hasWon,
   legalMovesForDelegatedRoll,
   moveControllerColor,
   nextColorAmong,
   nextTurnSeatColor,
   rollControllerColor,
-  rotationColors,
   snapshotTokens,
   startsSixStreak,
+  teamAllTokensHome,
+  teamOfColor,
   tryMoveSteps,
   turnActorColor,
   teamTeammateColor,
 } from "../ludo";
-import type { LudoEvent } from "./eventValidators";
+import type { EventActor, LudoEvent } from "./eventValidators";
 import { reject, type ReduceResult } from "./errors";
 import {
   applyGameFinishedReason,
   assignFinishRankInState,
   playableColors,
 } from "./finish";
+import { malformedEventReason } from "./shape";
 import {
-  activeColorsForMatch,
   createEmptyState,
   lobbySeatFromSnapshot,
   patchTokenSteps,
   replaceTokens,
   seatByColor,
+  seatedColors,
   teamPlayers,
   tokensForColors,
   updateSeat,
@@ -43,6 +47,84 @@ function assertPlaying(state: GameState): ReduceResult | null {
   if (state.phase === "finished") {
     return reject("game_finished", "Match already finished");
   }
+  if (state.phase !== "playing") {
+    return reject("wrong_phase", "Match has not started");
+  }
+  return null;
+}
+
+/** A seat actor must be the colour the event acts for; system actors may act for anyone. */
+function assertActor(actor: EventActor, color: Color): ReduceResult | null {
+  if (actor.kind === "seat" && actor.color !== color) {
+    return reject("wrong_actor", "Actor does not control this action");
+  }
+  return null;
+}
+
+/** Legal moves for the die currently on the table. */
+function legalMovesForPendingRoll(state: GameState) {
+  const dice = state.diceValue;
+  if (dice === null) return [];
+  if (state.passedRollTo !== null) {
+    return legalMovesForDelegatedRoll(state.tokens, state.passedRollTo, dice);
+  }
+  const mover = moveControllerColor(state.currentTurn, teamPlayers(state), state.mode, null);
+  return getLegalMovesForActor(state.tokens, mover, teamPlayers(state), state.mode, dice);
+}
+
+function extraTurnReason(
+  settle: Extract<GameState["settle"], { kind: "after_token_move" }>,
+): "six" | "capture" | "home" | null {
+  const didCapture = settle.captures > 0;
+  const reachedHome = settle.toSteps === FINISHED_STEPS;
+  if (!gainsExtraTurn(settle.dice, didCapture, reachedHome)) return null;
+  return reachedHome ? "home" : didCapture ? "capture" : "six";
+}
+
+function validateTurnEnd(
+  state: GameState,
+  reason: Extract<LudoEvent, { eventType: "TURN_ENDED" }>["payload"]["reason"],
+): ReduceResult | null {
+  if (reason === "moved") {
+    if (state.settle?.kind !== "after_token_move") {
+      return reject("invalid_turn_end", "No move to end the turn on");
+    }
+    const unresolved = assertCapturesResolved(state);
+    if (unresolved) return unresolved;
+    if (extraTurnReason(state.settle) !== null) {
+      return reject("invalid_turn_end", "Move earned an extra turn");
+    }
+    return null;
+  }
+  if (state.settle !== null) {
+    return reject("invalid_turn_end", "Move still unresolved");
+  }
+  if (reason === "no_moves") {
+    if (!state.diceRolled || state.diceValue === null) {
+      return reject("invalid_turn_end", "No roll to end the turn on");
+    }
+    if (legalMovesForPendingRoll(state).length > 0) {
+      return reject("invalid_turn_end", "A legal move is available");
+    }
+  }
+  if (reason === "three_sixes" && (state.diceRolled || state.diceValue !== 6)) {
+    return reject("invalid_turn_end", "No third six to end the turn on");
+  }
+  return null;
+}
+
+/** A move may not be settled while an opponent still sits on its landing cell. */
+function assertCapturesResolved(state: GameState): ReduceResult | null {
+  if (state.settle?.kind !== "after_token_move") return null;
+  const pending = findCaptureTargets(
+    state.tokens,
+    state.settle.tokenColor,
+    state.settle.toSteps,
+    state.mode,
+  );
+  if (pending.length > 0) {
+    return reject("capture_missing", "Move left a capturable token on its cell");
+  }
   return null;
 }
 
@@ -54,8 +136,13 @@ function advanceTurnColor(state: GameState, fromSeat: Color): Color {
 }
 
 export function reduce(state: GameState, event: LudoEvent): ReduceResult {
+  const malformed = malformedEventReason(event);
+  if (malformed) return reject("malformed_event", malformed);
   switch (event.eventType) {
     case "GAME_CREATED": {
+      if (state.phase !== "lobby" || state.seats.length > 0) {
+        return reject("wrong_phase", "Game already created");
+      }
       const p = event.payload;
       return {
         ok: true,
@@ -92,6 +179,9 @@ export function reduce(state: GameState, event: LudoEvent): ReduceResult {
       };
     }
     case "GAME_STARTED": {
+      if (state.phase === "playing") {
+        return reject("wrong_phase", "Match already in play");
+      }
       const p = event.payload;
       const seats = p.seats.map((s) => ({
         color: s.color,
@@ -103,7 +193,7 @@ export function reduce(state: GameState, event: LudoEvent): ReduceResult {
         finishRank: s.finishRank ?? null,
       }));
       const colors = seats.map((s) => s.color);
-      const firstTurn = colors[0] ?? "red";
+      const firstTurn = COLORS.find((c) => colors.includes(c)) ?? "red";
       return {
         ok: true,
         state: {
@@ -131,17 +221,20 @@ export function reduce(state: GameState, event: LudoEvent): ReduceResult {
     case "TURN_STARTED": {
       const playingCheck = assertPlaying(state);
       if (playingCheck && !playingCheck.ok) return playingCheck;
-      if (state.settle !== null) {
+      if (state.settle?.kind === "after_token_move") {
         return reject("settle_pending", "Turn start while move unresolved");
       }
       const seat = event.payload.seat;
       if (state.turnNumber > 0) {
+        if (state.settle?.kind !== "turn_ended") {
+          return reject("turn_not_ended", "Previous turn has not ended");
+        }
         const expected = advanceTurnColor(state, state.currentTurn);
         if (seat !== expected) {
           return reject("wrong_turn", "Turn seat mismatch");
         }
       } else {
-        const first = activeColorsForMatch(state)[0];
+        const first = seatedColors(state)[0];
         if (first && seat !== first) {
           return reject("wrong_turn", "First turn seat mismatch");
         }
@@ -150,6 +243,7 @@ export function reduce(state: GameState, event: LudoEvent): ReduceResult {
         ok: true,
         state: {
           ...state,
+          settle: null,
           currentTurn: seat,
           turnNumber: state.turnNumber + 1,
           diceValue: null,
@@ -170,9 +264,11 @@ export function reduce(state: GameState, event: LudoEvent): ReduceResult {
         return reject("settle_pending", "Cannot roll during settle");
       }
       const { color, value } = event.payload;
-      if (value < 1 || value > 6) {
+      if (!Number.isInteger(value) || value < 1 || value > 6) {
         return reject("invalid_dice", "Invalid dice value");
       }
+      const actorCheck = assertActor(event.actor, color);
+      if (actorCheck) return actorCheck;
       const rollColor = rollControllerColor(
         state.currentTurn,
         teamPlayers(state),
@@ -232,6 +328,9 @@ export function reduce(state: GameState, event: LudoEvent): ReduceResult {
     case "ROLL_PASSED": {
       const playingCheck = assertPlaying(state);
       if (playingCheck && !playingCheck.ok) return playingCheck;
+      if (state.mode !== "2v2") {
+        return reject("wrong_mode", "Rolls can only be passed in 2v2");
+      }
       if (!state.diceRolled || state.diceValue === null) {
         return reject("no_roll", "No roll to pass");
       }
@@ -263,6 +362,8 @@ export function reduce(state: GameState, event: LudoEvent): ReduceResult {
         state.mode,
         passed,
       );
+      const actorCheck = assertActor(event.actor, moveColor);
+      if (actorCheck) return actorCheck;
       const { tokenColor, tokenIndex } = event.payload;
       const legal = wasDelegated
         ? legalMovesForDelegatedRoll(state.tokens, passed, dice)
@@ -298,6 +399,7 @@ export function reduce(state: GameState, event: LudoEvent): ReduceResult {
           fromSteps: token.steps,
           toSteps: dest,
           wasDelegated,
+          captures: 0,
         },
       };
       return { ok: true, state: next };
@@ -305,6 +407,9 @@ export function reduce(state: GameState, event: LudoEvent): ReduceResult {
     case "TOKEN_CAPTURED": {
       if (state.settle?.kind !== "after_token_move") {
         return reject("unexpected_capture", "No move pending");
+      }
+      if (event.payload.byColor !== state.settle.tokenColor) {
+        return reject("invalid_capture", "Capturer is not the moved token");
       }
       const captures = findCaptureTargets(
         state.tokens,
@@ -318,29 +423,37 @@ export function reduce(state: GameState, event: LudoEvent): ReduceResult {
           c.index === event.payload.victimIndex,
       );
       if (!match) return reject("invalid_capture", "Capture not on landing");
-      let next = patchTokenSteps(
+      const next = patchTokenSteps(
         state,
         event.payload.victimColor,
         event.payload.victimIndex,
         -1,
       );
-      return { ok: true, state: next };
+      return {
+        ok: true,
+        state: {
+          ...next,
+          settle: { ...state.settle, captures: state.settle.captures + 1 },
+        },
+      };
     }
     case "EXTRA_TURN_GRANTED": {
       if (state.settle?.kind !== "after_token_move") {
         return reject("unexpected_extra", "No move pending");
       }
-      const { dice, toSteps } = state.settle;
-      const didCapture = findCaptureTargets(
-        state.tokens,
-        state.settle.tokenColor,
-        toSteps,
-        state.mode,
-      ).length > 0;
-      const reachedHome = toSteps === FINISHED_STEPS;
-      if (!gainsExtraTurn(dice, didCapture, reachedHome)) {
+      const unresolved = assertCapturesResolved(state);
+      if (unresolved) return unresolved;
+      if (event.payload.color !== state.settle.seat) {
+        return reject("wrong_seat", "Extra turn must go to the seat holder");
+      }
+      const reason = extraTurnReason(state.settle);
+      if (reason === null) {
         return reject("no_extra", "Extra turn not granted");
       }
+      if (event.payload.reason !== reason) {
+        return reject("extra_reason", `Extra turn was earned by ${reason}`);
+      }
+      const dice = state.settle.dice;
       const keepSix = dice === 6;
       return {
         ok: true,
@@ -356,7 +469,13 @@ export function reduce(state: GameState, event: LudoEvent): ReduceResult {
       };
     }
     case "PLAYER_FINISHED": {
+      const playingCheck = assertPlaying(state);
+      if (playingCheck) return playingCheck;
       const { color, rank } = event.payload;
+      if (!seatByColor(state, color)) return reject("no_seat", "Unknown seat");
+      if (!hasWon(state.tokens, color)) {
+        return reject("not_home", "Player still has tokens out");
+      }
       const assigned = assignFinishRankInState(state, color);
       if (assigned.rank !== rank) {
         return reject("rank_mismatch", "Finish rank mismatch");
@@ -368,22 +487,15 @@ export function reduce(state: GameState, event: LudoEvent): ReduceResult {
       return { ok: true, state: next };
     }
     case "TURN_ENDED": {
-      if (state.phase === "finished") {
-        return reject("game_finished", "Already finished");
-      }
-      if (
-        state.settle !== null &&
-        event.payload.reason !== "three_sixes" &&
-        event.payload.reason !== "no_moves" &&
-        event.payload.reason !== "timeout"
-      ) {
-        // move completion ends via turn end after settle cleared in prior events
-      }
+      const playingCheck = assertPlaying(state);
+      if (playingCheck) return playingCheck;
+      const invalid = validateTurnEnd(state, event.payload.reason);
+      if (invalid) return invalid;
       return {
         ok: true,
         state: {
           ...state,
-          settle: null,
+          settle: { kind: "turn_ended" },
           passedRollTo: null,
           consecutiveSixes: 0,
           sixStreakSnapshot: null,
@@ -409,9 +521,14 @@ export function reduce(state: GameState, event: LudoEvent): ReduceResult {
       };
     }
     case "PLAYER_ELIMINATED": {
+      const playingCheck = assertPlaying(state);
+      if (playingCheck) return playingCheck;
       const { color, reason } = event.payload;
       const seat = seatByColor(state, color);
       if (!seat) return reject("no_seat", "Unknown seat");
+      if (seat.eliminated || seat.finishRank != null) {
+        return reject("invalid_elimination", "Seat is no longer playing");
+      }
       const place =
         reason === "left"
           ? state.rankings.length + playableColors(state).length
@@ -425,7 +542,9 @@ export function reduce(state: GameState, event: LudoEvent): ReduceResult {
         next = replaceTokens(
           next,
           next.tokens.map((t) =>
-            t.color === color ? { ...t, steps: -1 } : t,
+            t.color === color && t.steps !== FINISHED_STEPS
+              ? { ...t, steps: -1 }
+              : t,
           ),
         );
       } else if (reason === "left") {
@@ -437,12 +556,27 @@ export function reduce(state: GameState, event: LudoEvent): ReduceResult {
       return { ok: true, state: next };
     }
     case "TEAM_FINISHED": {
+      const playingCheck = assertPlaying(state);
+      if (playingCheck) return playingCheck;
+      if (state.mode !== "2v2") {
+        return reject("wrong_mode", "Teams only finish in 2v2");
+      }
+      const team = event.payload.team;
+      if (!teamAllTokensHome(state.tokens, team)) {
+        return reject("not_home", "Team still has tokens out");
+      }
+      const winner =
+        state.winner && teamOfColor(state.winner) === team
+          ? state.winner
+          : (state.rankings.find((c) => teamOfColor(c) === team) ?? state.winner);
       return {
         ok: true,
-        state: { ...state, winningTeam: event.payload.team },
+        state: { ...state, winningTeam: team, winner },
       };
     }
     case "GAME_FINISHED": {
+      const playingCheck = assertPlaying(state);
+      if (playingCheck) return playingCheck;
       const next = applyGameFinishedReason(state, event.payload.reason);
       return { ok: true, state: { ...next, finishedAt: next.finishedAt ?? 0 } };
     }
@@ -453,7 +587,8 @@ export function reduce(state: GameState, event: LudoEvent): ReduceResult {
   }
 }
 
-export function reduceAll(
+/** Apply events in order; a pending move (settle) at the end is allowed. */
+export function reducePartial(
   initial: GameState,
   events: LudoEvent[],
 ): ReduceResult {
@@ -463,6 +598,17 @@ export function reduceAll(
     if (!result.ok) return result;
     current = result.state;
   }
+  return { ok: true, state: current };
+}
+
+/** Apply a complete transaction; it must not leave a move unresolved. */
+export function reduceAll(
+  initial: GameState,
+  events: LudoEvent[],
+): ReduceResult {
+  const result = reducePartial(initial, events);
+  if (!result.ok) return result;
+  const current = result.state;
   if (current.settle !== null) {
     return reject("incomplete", "Transaction left settle pending");
   }
