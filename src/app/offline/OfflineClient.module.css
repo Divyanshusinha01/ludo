@@ -1,0 +1,6 @@
+.center {
+  min-height: calc(100dvh - 2.25rem);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}

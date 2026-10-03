@@ -6,7 +6,6 @@ import { botDisplayName } from "../../convex/lib/bot";
 import { createOfflineGame } from "@/lib/offline/engine";
 import { COLOR_HEX, COLOR_LABEL } from "@/lib/player";
 import { Button, ErrorText } from "./ui";
-import { BoardHeroImage } from "./BoardHeroImage";
 import styles from "./OfflineSetup.module.css";
 
 type SeatDraft = {
@@ -90,11 +89,10 @@ export function OfflineSetup({ onStart, onBack }: Props) {
   return (
     <div className={styles.shell}>
       <header className={styles.header}>
-        <BoardHeroImage />
         <p className={styles.brand}>Play offline</p>
         <p className={styles.sub}>
-          Pass the device between humans on the couch, or mix in computer
-          opponents. Progress saves on this device automatically.
+          Pass the device around or add computer opponents. Progress saves on
+          this device.
         </p>
       </header>
 
@@ -127,11 +125,34 @@ export function OfflineSetup({ onStart, onBack }: Props) {
                 className={`${styles.seat} swap-in`}
                 style={{ ["--c" as string]: COLOR_HEX[color] }}
               >
-                <div className={styles.seatHead}>
-                  <span className={styles.swatch} />
-                  {COLOR_LABEL[color]}
-                </div>
-                <div className={styles.toggleRow} role="group">
+                <span
+                  className={styles.swatch}
+                  role="img"
+                  aria-label={COLOR_LABEL[color]}
+                />
+                {seat.isBot ? (
+                  <span className={styles.botName}>
+                    {botDisplayName(
+                      seats.slice(0, i).filter((x) => x.isBot).length,
+                    )}
+                  </span>
+                ) : (
+                  <input
+                    className={styles.nameInput}
+                    aria-label={`${COLOR_LABEL[color]} player name`}
+                    value={seat.name}
+                    onChange={(e) =>
+                      updateSeat(i, { name: e.target.value.slice(0, 20) })
+                    }
+                    maxLength={20}
+                    autoComplete="off"
+                  />
+                )}
+                <div
+                  className={styles.toggleRow}
+                  role="group"
+                  aria-label={`${COLOR_LABEL[color]} player type`}
+                >
                   <button
                     type="button"
                     className={
@@ -150,22 +171,9 @@ export function OfflineSetup({ onStart, onBack }: Props) {
                     aria-pressed={seat.isBot}
                     onClick={() => updateSeat(i, { isBot: true })}
                   >
-                    Computer
+                    Bot
                   </button>
                 </div>
-                {!seat.isBot && (
-                  <label className={styles.field}>
-                    Name
-                    <input
-                      value={seat.name}
-                      onChange={(e) =>
-                        updateSeat(i, { name: e.target.value.slice(0, 20) })
-                      }
-                      maxLength={20}
-                      autoComplete="off"
-                    />
-                  </label>
-                )}
               </li>
             );
           })}

@@ -12,8 +12,8 @@ import {
   subscribeOfflineGame,
 } from "@/lib/offline/storage";
 import { Button, Loader } from "@/components/ui";
-import { BoardHeroImage } from "@/components/BoardHeroImage";
 import styles from "@/components/HomeScreen.module.css";
+import layout from "./OfflineClient.module.css";
 
 type Mode = "prompt" | "setup" | "game";
 
@@ -72,9 +72,8 @@ export function OfflineClient() {
 
   if (mode === "prompt" && hasSavedGame) {
     return (
-      <div key="prompt" className={`${styles.shell} swap-in`}>
+      <div key="prompt" className={`${styles.shell} ${layout.center} swap-in`}>
         <div className={styles.hero}>
-          <BoardHeroImage />
           <p className={styles.brand}>Play offline</p>
           <h1 className={styles.headline}>Saved game on this device</h1>
           <p className={styles.sub}>
@@ -103,7 +102,7 @@ export function OfflineClient() {
 
   if (mode === "setup" || !state) {
     return (
-      <div key="setup" className="swap-in">
+      <div key="setup" className={`${layout.center} swap-in`}>
         <OfflineSetup
           onStart={(initial) => {
             startGame(initial);

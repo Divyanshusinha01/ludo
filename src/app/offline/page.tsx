@@ -5,7 +5,7 @@ export default function OfflinePage() {
     <main
       style={{
         minHeight: "100dvh",
-        padding: "1.25rem 1rem 2rem",
+        padding: "1rem 1rem 1.25rem",
         boxSizing: "border-box",
       }}
     >
