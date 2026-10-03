@@ -1,0 +1,18 @@
+---
+description: Convex backend conventions for this project
+globs: convex/**
+alwaysApply: false
+---
+
+# Convex conventions
+
+- Public `query`/`mutation`/`action` must declare `args` and `returns` validators.
+- Await every promise (`ctx.db.*`, `ctx.scheduler.*`, `ctx.run*`).
+- Use `.withIndex()` instead of `.filter()`; add the index to `convex/schema.ts`.
+- Avoid unbounded `.collect()`; paginate or `.take(n)` anything that can grow.
+- No `Date.now()` / `new Date()` inside queries; pass time in as an argument or use mutations/crons.
+- Only schedule or `ctx.run*` `internal.*` functions, never `api.*`.
+- No auth provider: players are identified by `clientId`. Validate with `assertValidClientId` (`lib/session.ts`) and authorize room actions with `requirePlayer` (`lib/roomAuth.ts`).
+- Keep function wrappers thin; game logic lives in `lib/` (`lib/game/*`, `lib/gameStore.ts`).
+- `"use node"` files may only export actions.
+- No `any`; use `Doc<"table">` / `Id<"table">` from `_generated/dataModel`.

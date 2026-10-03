@@ -19,7 +19,8 @@ import {
 } from "./lib/ludo";
 import { BOT_THINK_MS, botClientId, botDisplayName } from "./lib/bot";
 import { GameError, fail } from "./lib/errors";
-import { logEvent } from "./lib/log";
+import { logEvent, withOutcomeLogging } from "./lib/log";
+import { recordSample } from "./lib/metrics";
 import {
   assertValidClientId,
   assertValidRoomCode,
@@ -329,6 +330,7 @@ async function claimDisconnectedSeat(
     color: seat.color,
     clientId,
   });
+  await recordSample(ctx, { kind: "reconnect", at: now });
   return {
     roomId: room._id,
     code: room.code,
@@ -344,7 +346,7 @@ export const createRoom = mutation({
     mode: v.optional(v.union(v.literal("1v1"), v.literal("2v2"))),
   },
   returns: joinResultValidator,
-  handler: async (ctx, args) => {
+  handler: (ctx, args) => withOutcomeLogging(ctx, "rooms:createRoom", undefined, async () => {
     const clientId = assertValidClientId(args.clientId);
     const name = sanitizePlayerName(args.name);
     const now = Date.now();
@@ -416,8 +418,9 @@ export const createRoom = mutation({
     });
 
     logEvent("room_created", { roomCode: code, clientId });
+    await recordSample(ctx, { kind: "create", at: now });
     return { roomId, code, color };
-  },
+  }),
 });
 
 export const createVsComputer = mutation({
@@ -427,7 +430,7 @@ export const createVsComputer = mutation({
     botCount: v.number(),
   },
   returns: joinResultValidator,
-  handler: async (ctx, args) => {
+  handler: (ctx, args) => withOutcomeLogging(ctx, "rooms:createVsComputer", undefined, async () => {
     const clientId = assertValidClientId(args.clientId);
     const name = sanitizePlayerName(args.name);
     const botCount = Math.floor(args.botCount);
@@ -550,8 +553,9 @@ export const createVsComputer = mutation({
       clientId,
       bots: botCount,
     });
+    await recordSample(ctx, { kind: "create", at: now });
     return { roomId, code, color: hostColor };
-  },
+  }),
 });
 
 export const addBot = mutation({
@@ -680,7 +684,7 @@ export const joinRoom = mutation({
     team: v.optional(v.union(v.literal("A"), v.literal("B"))),
   },
   returns: joinResultValidator,
-  handler: async (ctx, args) => {
+  handler: (ctx, args) => withOutcomeLogging(ctx, "rooms:joinRoom", undefined, async () => {
     const clientId = assertValidClientId(args.clientId);
     const code = assertValidRoomCode(args.code);
     const name = sanitizePlayerName(args.name);
@@ -712,6 +716,7 @@ export const joinRoom = mutation({
         color: existing.color,
         clientId,
       });
+      await recordSample(ctx, { kind: "reconnect", at: now });
       return {
         roomId: room._id,
         code: room.code,
@@ -897,8 +902,9 @@ export const joinRoom = mutation({
     }
 
     logEvent("player_joined", { roomCode: room.code, color, clientId });
+    await recordSample(ctx, { kind: "join", at: now });
     return { roomId: room._id, code: room.code, color, reconnected: false };
-  },
+  }),
 });
 
 export const heartbeat = mutation({
@@ -922,6 +928,10 @@ export const heartbeat = mutation({
     await ctx.db.patch(player._id, {
       connected: true,
       lastSeenAt: now,
+    });
+    await recordSample(ctx, {
+      kind: player.connected ? "heartbeat" : "reconnect",
+      at: now,
     });
     return null;
   },
@@ -1107,7 +1117,7 @@ export const leaveRoom = mutation({
     clientId: v.string(),
   },
   returns: leaveResultValidator,
-  handler: async (ctx, args) => {
+  handler: (ctx, args) => withOutcomeLogging(ctx, "rooms:leaveRoom", args.roomId, async () => {
     const clientId = assertValidClientId(args.clientId);
     const room = await ctx.db.get(args.roomId);
     if (!room) return { emptied: true };
@@ -1121,6 +1131,7 @@ export const leaveRoom = mutation({
     if (!player) return { emptied: false };
 
     const now = Date.now();
+    await recordSample(ctx, { kind: "leave", at: now });
     logEvent("player_left", {
       roomCode: room.code,
       color: player.color,
@@ -1203,7 +1214,7 @@ export const leaveRoom = mutation({
     }
     await ctx.db.patch(args.roomId, patches);
     return { emptied: false };
-  },
+  }),
 });
 
 export const kickPlayer = mutation({
@@ -1264,7 +1275,7 @@ export const startGame = mutation({
     clientId: v.string(),
   },
   returns: v.null(),
-  handler: async (ctx, args) => {
+  handler: (ctx, args) => withOutcomeLogging(ctx, "rooms:startGame", args.roomId, async () => {
     const clientId = assertValidClientId(args.clientId);
     const room = await ctx.db.get(args.roomId);
     if (!room) fail(GameError.roomNotFound);
@@ -1309,8 +1320,9 @@ export const startGame = mutation({
       players: players.length,
       clientId,
     });
+    await recordSample(ctx, { kind: "start", at: now });
     return null;
-  },
+  }),
 });
 
 export const rematch = mutation({
@@ -1319,7 +1331,7 @@ export const rematch = mutation({
     clientId: v.string(),
   },
   returns: v.null(),
-  handler: async (ctx, args) => {
+  handler: (ctx, args) => withOutcomeLogging(ctx, "rooms:rematch", args.roomId, async () => {
     const clientId = assertValidClientId(args.clientId);
     const room = await ctx.db.get(args.roomId);
     if (!room) fail(GameError.roomNotFound);
@@ -1385,8 +1397,9 @@ export const rematch = mutation({
       rematch: true,
       clientId,
     });
+    await recordSample(ctx, { kind: "start", at: now });
     return null;
-  },
+  }),
 });
 
 const roomBundleValidator = v.union(

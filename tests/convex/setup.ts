@@ -187,10 +187,17 @@ export type StartedRoom = {
 /** Create a lobby, fill it with humans, and start the match. */
 export async function startedRoom(
   t: T,
-  opts: { players: number; mode?: GameMode; start?: boolean },
+  opts: {
+    players: number;
+    mode?: GameMode;
+    start?: boolean;
+    /** Offset for session ids, so several rooms in one test get distinct players. */
+    clientBase?: number;
+  },
 ): Promise<StartedRoom> {
   const mode = opts.mode ?? "1v1";
-  const host = clientId(1);
+  const base = opts.clientBase ?? 0;
+  const host = clientId(base + 1);
   const created = await t.mutation(api.rooms.createRoom, {
     clientId: host,
     name: "P1",
@@ -200,7 +207,7 @@ export async function startedRoom(
   const clients: Seats = { [created.color]: host };
   const teams: Array<"A" | "B"> = ["B", "B", "A"];
   for (let i = 2; i <= opts.players; i++) {
-    const id = clientId(i);
+    const id = clientId(base + i);
     const joined = await t.mutation(api.rooms.joinRoom, {
       code: created.code,
       clientId: id,
@@ -375,6 +382,118 @@ export async function playToEnd(
     await opts.afterAction?.();
   }
   throw new Error(`match did not finish within ${max} actions`);
+}
+
+/** The next action a client would send in a playing room: who sends it and with what. */
+export type NextAction =
+  | { kind: "roll"; client: string; face: number }
+  | { kind: "move"; client: string; tokenColor: Color; tokenIndex: number };
+
+/** Pick the next legal action with `rng`, or null once the room is not playing. */
+export async function nextAction(
+  t: T,
+  room: StartedRoom,
+  rng: () => number,
+): Promise<NextAction | null> {
+  const b = await bundle(t, room.roomId);
+  if (b.room.status !== "playing") return null;
+  const players = teamPlayers(b.players);
+  const seat = b.room.currentTurn;
+  if (!b.room.diceRolled) {
+    const roller = rollControllerColor(seat, players, b.room.mode, b.room.passedRollTo);
+    return { kind: "roll", client: seatClient(room, roller), face: 1 + Math.floor(rng() * 6) };
+  }
+  const mover = moveControllerColor(seat, players, b.room.mode, b.room.passedRollTo);
+  const client = seatClient(room, mover);
+  const legal = await t.query(api.game.getLegalTokenIndexes, { roomId: room.roomId, clientId: client });
+  if (legal.length === 0) throw new Error(`dice on the table but ${mover} has no legal move`);
+  const pick = legal[Math.floor(rng() * legal.length)]!;
+  return { kind: "move", client, tokenColor: pick.color, tokenIndex: pick.index };
+}
+
+/** Play up to `count` legal actions; stops early if the match ends. Returns actions played. */
+export async function playActions(
+  t: T,
+  dice: DiceQueue,
+  room: StartedRoom,
+  rng: () => number,
+  count: number,
+): Promise<number> {
+  for (let i = 0; i < count; i++) {
+    const action = await nextAction(t, room, rng);
+    if (!action) return i;
+    if (action.kind === "roll") await rollAs(t, dice, room.roomId, action.client, action.face);
+    else await moveAs(t, room.roomId, action.client, action.tokenColor, action.tokenIndex);
+  }
+  return count;
+}
+
+function sortedTokens(tokens: Array<{ color: Color; index: number; steps: number }>) {
+  return tokens
+    .map((tok) => ({ color: tok.color, index: tok.index, steps: tok.steps }))
+    .sort((a, b) => a.color.localeCompare(b.color) || a.index - b.index);
+}
+
+/** The game-relevant part of a getRoom bundle, as a client renders it. */
+export function bundleView(b: Awaited<ReturnType<typeof bundle>>) {
+  return {
+    phase: b.room.status,
+    currentTurn: b.room.currentTurn,
+    diceValue: b.room.diceValue,
+    diceRolled: b.room.diceRolled,
+    turnId: b.room.turnId,
+    passedRollTo: b.room.passedRollTo,
+    winner: b.room.winner,
+    rankings: b.room.rankings,
+    seats: b.players
+      .map((p) => ({ color: p.color, lives: p.lives, eliminated: p.eliminated, finishRank: p.finishRank }))
+      .sort((a, b) => a.color.localeCompare(b.color)),
+    tokens: sortedTokens(b.tokens),
+  };
+}
+
+/** The same view derived from a GameState (live projection or a client replay). */
+export function stateView(s: GameState) {
+  return {
+    phase: s.phase,
+    currentTurn: s.currentTurn,
+    diceValue: s.diceValue,
+    diceRolled: s.diceRolled,
+    turnId: s.turnNumber,
+    passedRollTo: s.passedRollTo,
+    winner: s.winner,
+    rankings: s.rankings,
+    seats: s.seats
+      .map((p) => ({ color: p.color, lives: p.lives, eliminated: p.eliminated, finishRank: p.finishRank }))
+      .sort((a, b) => a.color.localeCompare(b.color)),
+    tokens: sortedTokens(s.tokens),
+  };
+}
+
+/**
+ * Incremental resync: page through listEvents after `seenSeq` and replay the
+ * missed events onto the client's last known state.
+ */
+export async function catchUp(
+  t: T,
+  roomId: RoomId,
+  client: string,
+  from: { state: GameState; seenSeq: number },
+  pageSize = 200,
+): Promise<{ state: GameState; seenSeq: number; fetched: number; pages: number }> {
+  const missed: LudoEvent[] = [];
+  let afterSeq = from.seenSeq;
+  let pages = 0;
+  for (;;) {
+    const page = await t.query(api.gameEvents.listEvents, { roomId, clientId: client, afterSeq, limit: pageSize });
+    pages++;
+    missed.push(...(page.events as LudoEvent[]));
+    if (page.nextAfterSeq === null) break;
+    afterSeq = page.nextAfterSeq;
+  }
+  if (missed.length === 0) return { ...from, fetched: 0, pages };
+  const { state } = replayGame(from.state, missed, { firstSeq: from.seenSeq + 1 });
+  return { state, seenSeq: missed.at(-1)!.seq, fetched: missed.length, pages };
 }
 
 export async function eventTypes(t: T, roomId: RoomId, afterSeq = 0): Promise<string[]> {

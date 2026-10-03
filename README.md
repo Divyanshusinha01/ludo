@@ -24,13 +24,24 @@ Turn expiry: if a command arrives after the turn clock, the server commits timeo
 
 Debug replay UI: `/debug/replay/[CODE]` in development, or set `NEXT_PUBLIC_ENABLE_REPLAY_DEBUG=1` in production.
 
+## Operations
+
+[docs/operations.md](docs/operations.md) covers the version and reconnect model, metrics and the `/ops` dashboard, k6 load tests with measured results, and troubleshooting.
+
+Ops dashboard: `/ops` in development, or set `NEXT_PUBLIC_ENABLE_OPS_DASHBOARD=1` in production. It also needs the `OPS_DASHBOARD_TOKEN` Convex environment variable (`npx convex env set OPS_DASHBOARD_TOKEN <value>`).
+
 ## Scripts
 
 - `npm run dev` — Next.js frontend
 - `npm run dev:convex` — Convex backend watcher
-- `npm test` / `npm run test:logic` — pure Ludo rules + roll policy + geometry (Vitest)
+- `npm test` / `npm run test:logic` — all Vitest projects (unit, Convex, UI)
+- `npm run test:unit` / `test:convex` / `test:concurrency` / `test:ui` — one project or folder
 - `npm run test:watch` — Vitest watch mode
+- `npm run typecheck` — TypeScript for the app and `convex/`
 - `npm run test:integration` — live Convex smoke (needs `.env.local`)
+- `npm run test:full-game` — plays a full game against the live backend
+- `npm run load:gameplay` / `load:reconnect` — k6 load tests against the local backend (needs [k6](https://k6.io), `winget install k6`)
+- `npm run load:verify` — `verifyReplay` on a sample of rooms after a load run
 - `npm run build` — production Next.js build
 
 ### Mobile QA checklist

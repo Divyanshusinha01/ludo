@@ -1,10 +1,10 @@
 {
   "plugins": {
     "firebase": {
-      "enabled": true
+      "enabled": false
     },
     "convex": {
-      "enabled": true
+      "enabled": false
     },
     "vercel": {
       "enabled": true

@@ -19,7 +19,11 @@ import {
   type TokenMoveChoice,
 } from "../../convex/lib/ludo";
 import { useRoomPresence } from "@/hooks/useRoomPresence";
+import { useConnectionResync } from "@/hooks/useConnectionResync";
+import { useOpsReporter } from "@/hooks/useOpsReporter";
 import { useOpponentDiceRoll } from "@/hooks/useOpponentDiceRoll";
+import { classifyError, isStaleError } from "@/lib/opsReporter";
+import type { MetricKind } from "../../convex/lib/metrics";
 import {
   useTokenAnimation,
   type AnimToken,
@@ -61,6 +65,7 @@ const ROLL_MIN_SPIN_MS = 220;
 const ROLL_REVEAL_MS = 320;
 /** Brief pause after dice reveal before a server auto-move animates. */
 const AUTO_MOVE_DELAY_MS = 260;
+const NOTICE_MS = 2_500;
 
 function tokenSig(tokens: AnimToken[]) {
   return tokens
@@ -121,6 +126,20 @@ export function GameScreen({ data, roomId, clientId }: Props) {
   const moveLock = useRef(false);
 
   useRoomPresence(roomId, clientId);
+  const reporter = useOpsReporter(roomId, clientId);
+  const { connected } = useConnectionResync({
+    roomId,
+    clientId,
+    eventSeq: data.room.eventSeq,
+    reporter,
+  });
+  const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!notice) return;
+    const id = setTimeout(() => setNotice(null), NOTICE_MS);
+    return () => clearTimeout(id);
+  }, [notice]);
 
   useEffect(() => {
     bindAudioUnlock();
@@ -295,7 +314,12 @@ export function GameScreen({ data, roomId, clientId }: Props) {
   const iMove = meActive && me.color === moveController && diceRolled;
   const myTurn = iRoll || iMove;
   const canRoll =
-    iRoll && !diceRolled && !rolling && !animating && !optimisticTokens;
+    connected &&
+    iRoll &&
+    !diceRolled &&
+    !rolling &&
+    !animating &&
+    !optimisticTokens;
 
   const teammateColor =
     isTeamMode && me ? teamTeammateColor(me.color as Color) : null;
@@ -304,6 +328,7 @@ export function GameScreen({ data, roomId, clientId }: Props) {
       ? players.find((p) => p.color === teammateColor)
       : undefined;
   const canPass =
+    connected &&
     isTeamMode &&
     meActive &&
     me?.color === turnSeat &&
@@ -380,6 +405,36 @@ export function GameScreen({ data, roomId, clientId }: Props) {
     !!players.find((p) => p.isMe && !p.connected) &&
     !offline;
 
+  function reportOk(kind: MetricKind, started: number) {
+    reporter.record({ kind, outcome: "ok", latencyMs: performance.now() - started });
+  }
+
+  function reportFailure(kind: MetricKind, started: number, err: unknown) {
+    const { outcome, code, message } = classifyError(err);
+    reporter.record({
+      kind,
+      outcome,
+      latencyMs: performance.now() - started,
+      code,
+      message,
+    });
+  }
+
+  /**
+   * A stale rejection means the subscription already holds a newer head:
+   * drop local guesses and let the server view render. Returns false for
+   * any other error.
+   */
+  function resyncIfStale(err: unknown): boolean {
+    if (!isStaleError(err)) return false;
+    setOptimisticTokens(null);
+    setLocalDice(null);
+    setError(null);
+    setNotice("Board updated");
+    reporter.record({ kind: "resync", outcome: "ok" });
+    return true;
+  }
+
   async function applyOptimisticMove(
     tokenColor: Color,
     tokenIndex: number,
@@ -428,6 +483,7 @@ export function GameScreen({ data, roomId, clientId }: Props) {
     haptic("roll");
     playSound("roll");
     const started = performance.now();
+    let answered = false;
     try {
       const result = await rollDice({
         roomId,
@@ -435,6 +491,8 @@ export function GameScreen({ data, roomId, clientId }: Props) {
         turnId: room.turnId,
         expectedSeq: room.eventSeq,
       });
+      answered = true;
+      reportOk("roll", started);
       // Keep a short spin even on fast networks; never stack extra delay
       // after a slow round-trip (joiners feel this hardest).
       const elapsed = performance.now() - started;
@@ -488,8 +546,11 @@ export function GameScreen({ data, roomId, clientId }: Props) {
       setReveal(true);
       setTimeout(() => setReveal(false), ROLL_REVEAL_MS);
     } catch (e) {
-      setError(formatConvexError(e, "Could not roll"));
-      setLocalDice(null);
+      if (!answered) reportFailure("roll", started, e);
+      if (!resyncIfStale(e)) {
+        setError(formatConvexError(e, "Could not roll"));
+        setLocalDice(null);
+      }
     } finally {
       setRolling(false);
       rollLock.current = false;
@@ -497,9 +558,10 @@ export function GameScreen({ data, roomId, clientId }: Props) {
   }
 
   async function onPassTurn(color: Color) {
-    if (passTargetColor !== color) return;
+    if (passTargetColor !== color || !connected) return;
     setError(null);
     haptic("tap");
+    const started = performance.now();
     try {
       await passTurn({
         roomId,
@@ -508,14 +570,19 @@ export function GameScreen({ data, roomId, clientId }: Props) {
         targetColor: color,
         expectedSeq: room.eventSeq,
       });
+      reportOk("pass", started);
       setLocalDice(null);
     } catch (e) {
-      setError(formatConvexError(e, "Could not pass turn"));
+      reportFailure("pass", started, e);
+      if (!resyncIfStale(e)) {
+        setError(formatConvexError(e, "Could not pass turn"));
+      }
     }
   }
 
   async function commitMove(tokenColor: Color, tokenIndex: number) {
     if (
+      !connected ||
       animating ||
       moveLock.current ||
       !myTurn ||
@@ -531,6 +598,7 @@ export function GameScreen({ data, roomId, clientId }: Props) {
 
     await applyOptimisticMove(tokenColor, tokenIndex, diceValue);
 
+    const started = performance.now();
     try {
       const result = await moveToken({
         roomId,
@@ -540,17 +608,21 @@ export function GameScreen({ data, roomId, clientId }: Props) {
         turnId: room.turnId,
         expectedSeq: room.eventSeq,
       });
+      reportOk("move", started);
       if (result.captured) {
         haptic("capture");
       }
     } catch (e) {
-      setError(formatConvexError(e, "Illegal move"));
-      setOptimisticTokens(null);
-      setLocalDice({
-        value: diceValue,
-        rolled: true,
-        turnId: room.turnId,
-      });
+      reportFailure("move", started, e);
+      if (!resyncIfStale(e)) {
+        setError(formatConvexError(e, "Illegal move"));
+        setOptimisticTokens(null);
+        setLocalDice({
+          value: diceValue,
+          rolled: true,
+          turnId: room.turnId,
+        });
+      }
     } finally {
       moveLock.current = false;
     }
@@ -663,7 +735,7 @@ export function GameScreen({ data, roomId, clientId }: Props) {
 
   return (
     <div className={styles.game}>
-      {(offline || meDisconnected) && (
+      {(offline || meDisconnected || !connected) && (
         <div className={styles.reconnect} role="status">
           Reconnecting… Your seat is saved.
         </div>
@@ -793,6 +865,12 @@ export function GameScreen({ data, roomId, clientId }: Props) {
         </p>
       )}
 
+      {notice && (
+        <p className={styles.banner} role="status" aria-live="polite">
+          {notice}
+        </p>
+      )}
+
       {botThinking && (
         <p className={styles.banner} role="status" aria-live="polite">
           Computer is thinking…
@@ -892,7 +970,7 @@ export function GameScreen({ data, roomId, clientId }: Props) {
           tokens={displayTokens}
           selectable={[]}
           selectableTokens={
-            myTurn && diceRolled && !animating && !optimisticTokens
+            connected && myTurn && diceRolled && !animating && !optimisticTokens
               ? selectableTokens
               : []
           }

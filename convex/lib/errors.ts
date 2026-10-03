@@ -36,6 +36,8 @@ export const GameError = {
   invalidPassTarget: "That's not your teammate's home",
   passNothingToPass: "Roll first — nothing to pass yet",
   legacyRoom: "Start a new game — this room is no longer supported",
+  invalidMetrics: "Invalid metrics batch",
+  unauthorized: "Not authorized",
 } as const;
 
 export type GameErrorMessage = (typeof GameError)[keyof typeof GameError];

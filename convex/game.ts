@@ -33,8 +33,11 @@ import {
   assertEventSourcedRoom,
   commitEvents,
   loadGameState,
+  rejectStale,
 } from "./lib/gameStore";
 import { summarizeMove, summarizeRoll } from "./lib/gameSummaries";
+import { withOutcomeLogging } from "./lib/log";
+import { recordSample } from "./lib/metrics";
 
 async function loadTokens(
   ctx: MutationCtx | QueryCtx,
@@ -90,9 +93,18 @@ async function commitTurnExpiryIfNeeded(
   return true;
 }
 
-function assertFreshTurn(room: Doc<"rooms">, expectedTurnId: number) {
+function assertFreshTurn(
+  room: Doc<"rooms">,
+  expectedTurnId: number,
+  expectedSeq: number,
+) {
   if ((room.turnId ?? 0) !== expectedTurnId) {
-    fail(GameError.staleAction);
+    rejectStale(room, "turn_mismatch", {
+      headSeq: room.eventSeq,
+      expectedSeq,
+      turnId: room.turnId ?? 0,
+      expectedTurnId,
+    });
   }
 }
 
@@ -200,20 +212,21 @@ export const rollDice = mutation({
     expectedSeq: v.number(),
   },
   returns: rollResultValidator,
-  handler: async (ctx, args) => {
+  handler: (ctx, args) => withOutcomeLogging(ctx, "game:rollDice", args.roomId, async () => {
     const clientId = assertValidClientId(args.clientId);
     const room = await ctx.db.get(args.roomId);
     if (!room) fail(GameError.roomNotFound);
     if (room.status !== "playing") fail(GameError.gameNotPlaying);
     assertEventSourcedRoom(room);
 
-    assertFreshTurn(room, args.turnId);
+    assertFreshTurn(room, args.turnId, args.expectedSeq);
 
     if (room.diceRolled) fail(GameError.diceAlreadyRolled);
 
     const player = await requireRollPlayer(ctx, args.roomId, clientId, room);
     if (player.isBot) fail(GameError.notYourTurn);
     if (await commitTurnExpiryIfNeeded(ctx, room)) {
+      await recordSample(ctx, { kind: "timeout" });
       return {
         value: 0,
         skipped: true,
@@ -247,8 +260,9 @@ export const rollDice = mutation({
       now,
       actorClientId: clientId,
     });
+    await recordSample(ctx, { kind: "roll" });
     return summarizeRoll(before, committed.events, committed.state);
-  },
+  }),
 });
 
 export const moveToken = mutation({
@@ -263,14 +277,14 @@ export const moveToken = mutation({
     expectedSeq: v.number(),
   },
   returns: moveResultValidator,
-  handler: async (ctx, args) => {
+  handler: (ctx, args) => withOutcomeLogging(ctx, "game:moveToken", args.roomId, async () => {
     const clientId = assertValidClientId(args.clientId);
     const room = await ctx.db.get(args.roomId);
     if (!room) fail(GameError.roomNotFound);
     if (room.status !== "playing") fail(GameError.gameNotPlaying);
     assertEventSourcedRoom(room);
 
-    assertFreshTurn(room, args.turnId);
+    assertFreshTurn(room, args.turnId, args.expectedSeq);
 
     const player = await requireMovePlayer(ctx, args.roomId, clientId, room);
     if (player.isBot) fail(GameError.notYourTurn);
@@ -301,8 +315,9 @@ export const moveToken = mutation({
       now,
       actorClientId: clientId,
     });
+    await recordSample(ctx, { kind: "move" });
     return summarizeMove(before, committed.events, committed.state);
-  },
+  }),
 });
 
 export const passTurn = mutation({
@@ -314,7 +329,7 @@ export const passTurn = mutation({
     expectedSeq: v.number(),
   },
   returns: v.null(),
-  handler: async (ctx, args) => {
+  handler: (ctx, args) => withOutcomeLogging(ctx, "game:passTurn", args.roomId, async () => {
     const clientId = assertValidClientId(args.clientId);
     const room = await ctx.db.get(args.roomId);
     if (!room) fail(GameError.roomNotFound);
@@ -323,7 +338,7 @@ export const passTurn = mutation({
 
     if (modeFromRoom(room) !== "2v2") fail(GameError.passNotAllowed);
 
-    assertFreshTurn(room, args.turnId);
+    assertFreshTurn(room, args.turnId, args.expectedSeq);
 
     const player = await requirePlayerInRoom(ctx, args.roomId, clientId);
     if (player.isBot) fail(GameError.notYourTurn);
@@ -355,8 +370,9 @@ export const passTurn = mutation({
       now,
       actorClientId: clientId,
     });
+    await recordSample(ctx, { kind: "pass" });
     return null;
-  },
+  }),
 });
 
 /** Server-side turn timeout: lose a life, maybe eliminate, advance turn. */
@@ -394,6 +410,7 @@ export const handleTurnTimeout = internalMutation({
       expectedSeq: room.eventSeq,
       now,
     });
+    await recordSample(ctx, { kind: "timeout" });
     return null;
   },
 });
@@ -448,6 +465,7 @@ export const playBotTurn = internalMutation({
       now,
       actorClientId: bot?.clientId,
     });
+    await recordSample(ctx, { kind: "bot" });
     return null;
   },
 });

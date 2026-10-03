@@ -23,6 +23,10 @@ export const MAX_CHAT_LEN = 200;
 export const CHAT_MIN_INTERVAL_MS = 1_000;
 /** Minimum gap between troubleshoot reports from one seated player. */
 export const TROUBLE_MIN_INTERVAL_MS = 20_000;
+/** Minimum gap between client metrics batches from one seated player. */
+export const METRICS_MIN_INTERVAL_MS = 5_000;
+/** Max items accepted in one client metrics batch. */
+export const MAX_METRICS_BATCH = 50;
 /** Soft cap on messages kept per room. */
 export const MAX_CHAT_MESSAGES = 100;
 
