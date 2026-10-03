@@ -1,12 +1,15 @@
 "use client";
 
 import { CSSProperties, ReactNode } from "react";
+import styles from "./ui.module.css";
 
 type ButtonProps = {
   children: ReactNode;
   type?: "button" | "submit";
   variant?: "primary" | "secondary" | "ink";
   disabled?: boolean;
+  /** Shows an inline spinner and blocks clicks while async work runs. */
+  loading?: boolean;
   onClick?: () => void;
   className?: string;
   style?: CSSProperties;
@@ -46,28 +49,61 @@ export function Button({
   type = "button",
   variant = "primary",
   disabled,
+  loading = false,
   onClick,
   className,
   style,
   ...rest
 }: ButtonProps) {
+  const inactive = disabled || loading;
   return (
     <button
       type={type}
-      disabled={disabled}
+      disabled={inactive}
       onClick={onClick}
-      className={className}
+      aria-busy={loading || undefined}
+      className={className ? `${styles.btn} ${className}` : styles.btn}
       style={{
         ...base,
         ...variants[variant],
-        opacity: disabled ? 0.5 : 1,
-        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled && !loading ? 0.5 : loading ? 0.85 : 1,
+        cursor: inactive ? "not-allowed" : "pointer",
         ...style,
       }}
       {...rest}
     >
+      {loading && <span className={styles.spinner} aria-hidden="true" />}
       {children}
     </button>
+  );
+}
+
+/**
+ * Pending-state indicator. Stays invisible for the first ~180ms so quick
+ * loads never flash a spinner.
+ */
+export function Loader({
+  label = "Loading…",
+  fill = false,
+}: {
+  label?: string;
+  /** Take most of the viewport, for full-page route loads. */
+  fill?: boolean;
+}) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={fill ? `${styles.loader} ${styles.loaderFill}` : styles.loader}
+    >
+      <span className={styles.dots} aria-hidden="true">
+        <span className={styles.dot} />
+        <span className={styles.dot} />
+        <span className={styles.dot} />
+        <span className={styles.dot} />
+      </span>
+      <p className={styles.loaderLabel}>{label}</p>
+    </div>
   );
 }
 

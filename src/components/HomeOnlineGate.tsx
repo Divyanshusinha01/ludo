@@ -3,15 +3,19 @@
 import dynamic from "next/dynamic";
 import { ConvexClientProvider } from "./ConvexClientProvider";
 import type { HomeOnlineMode } from "./HomeOnlineFlow";
+import { LoadingLabel, Skeleton } from "./Skeleton";
 import styles from "./HomeScreen.module.css";
 
 const HomeOnlineFlow = dynamic(
   () => import("./HomeOnlineFlow").then((m) => m.HomeOnlineFlow),
   {
     loading: () => (
-      <p className={styles.hint} role="status">
-        Loading online play…
-      </p>
+      <div className={`${styles.actions} ${styles.delayedReveal}`}>
+        <LoadingLabel>Loading online play…</LoadingLabel>
+        {[0, 1, 2].map((i) => (
+          <Skeleton key={i} height="3.1rem" style={{ borderRadius: 999 }} />
+        ))}
+      </div>
     ),
   },
 );

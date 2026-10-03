@@ -1,0 +1,139 @@
+.btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  transition:
+    transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 200ms ease,
+    background-color 200ms ease,
+    box-shadow 200ms ease,
+    filter 200ms ease;
+  will-change: transform;
+}
+
+.btn:hover:not(:disabled) {
+  filter: brightness(1.04);
+}
+
+.btn:active:not(:disabled) {
+  transform: scale(0.97);
+  transition-duration: 70ms;
+}
+
+.btn[aria-busy="true"] {
+  cursor: progress !important;
+}
+
+.spinner {
+  flex-shrink: 0;
+  width: 1em;
+  height: 1em;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  animation:
+    spin 700ms linear infinite,
+    popIn 180ms ease-out both;
+}
+
+.loader {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.9rem;
+  padding: 2.5rem 1rem;
+  color: var(--muted);
+  text-align: center;
+  /* Fast loads finish before this delay, so nothing flashes on screen. */
+  animation: reveal 260ms ease-out 180ms both;
+}
+
+.loaderFill {
+  min-height: 60dvh;
+}
+
+.dots {
+  display: flex;
+  gap: 0.45rem;
+}
+
+.dot {
+  width: 0.8rem;
+  height: 0.8rem;
+  border-radius: 50%;
+  background: var(--dot);
+  box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.18);
+  animation: hop 900ms cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+.dot:nth-child(1) {
+  --dot: #e53935;
+}
+
+.dot:nth-child(2) {
+  --dot: #43a047;
+  animation-delay: 110ms;
+}
+
+.dot:nth-child(3) {
+  --dot: #e6a100;
+  animation-delay: 220ms;
+}
+
+.dot:nth-child(4) {
+  --dot: #1e88e5;
+  animation-delay: 330ms;
+}
+
+.loaderLabel {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+@keyframes spin {
+  to {
+    rotate: 360deg;
+  }
+}
+
+@keyframes popIn {
+  from {
+    opacity: 0;
+    scale: 0.4;
+  }
+}
+
+@keyframes hop {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+  }
+  30% {
+    transform: translateY(-0.55rem);
+  }
+}
+
+@keyframes reveal {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn:active:not(:disabled) {
+    transform: none;
+  }
+
+  .loader {
+    animation: none;
+  }
+}

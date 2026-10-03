@@ -124,7 +124,7 @@ export function OfflineSetup({ onStart, onBack }: Props) {
             return (
               <li
                 key={color}
-                className={styles.seat}
+                className={`${styles.seat} swap-in`}
                 style={{ ["--c" as string]: COLOR_HEX[color] }}
               >
                 <div className={styles.seatHead}>

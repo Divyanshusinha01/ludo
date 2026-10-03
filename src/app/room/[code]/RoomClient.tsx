@@ -6,15 +6,18 @@ import Link from "next/link";
 import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
-import { Button, ErrorText, StatusText } from "@/components/ui";
+import { Button, ErrorText, Loader, StatusText } from "@/components/ui";
+
+const loadLobby = () => import("@/components/Lobby");
+const loadGameScreen = () => import("@/components/GameScreen");
 
 const Lobby = dynamic(
-  () => import("@/components/Lobby").then((m) => m.Lobby),
-  { loading: () => <StatusText>Loading lobby…</StatusText> },
+  () => loadLobby().then((m) => m.Lobby),
+  { loading: () => <Loader fill label="Loading lobby…" /> },
 );
 const GameScreen = dynamic(
-  () => import("@/components/GameScreen").then((m) => m.GameScreen),
-  { loading: () => <StatusText>Loading game…</StatusText> },
+  () => loadGameScreen().then((m) => m.GameScreen),
+  { loading: () => <Loader fill label="Loading game…" /> },
 );
 const ChatPanel = dynamic(
   () => import("@/components/ChatPanel").then((m) => m.ChatPanel),
@@ -60,6 +63,7 @@ export function RoomClient({
   const name = nameDraft ?? profile?.displayName ?? "";
   const pendingJoinName = usePendingJoinName();
   const [joining, setJoining] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [joinTeam, setJoinTeam] = useState<"A" | "B" | null>(null);
   const [offline, setOffline] = useState(false);
   const [troubleBusy, setTroubleBusy] = useState(false);
@@ -88,6 +92,12 @@ export function RoomClient({
     api.rooms.getRejoinRequestStatus,
     pendingRequestId ? { requestId: pendingRequestId } : "skip",
   );
+
+  // Download the screen chunks while the room query is still in flight.
+  useEffect(() => {
+    void loadLobby();
+    void loadGameScreen();
+  }, []);
 
   useEffect(() => {
     const sync = () => setOffline(!navigator.onLine);
@@ -125,7 +135,7 @@ export function RoomClient({
   // Home "Join game" already collected a name — join once, no prefill UI.
   useEffect(() => {
     if (!clientId || roomLoading || roomMissing || hasMe) return;
-    if (pendingRequestId || pendingJoinTried.current || joining) return;
+    if (pendingRequestId || pendingJoinTried.current || joining || submitting) return;
     // Auto-join only in lobby; mid-game rejoin needs explicit name entry.
     if (roomStatus !== "lobby") return;
     if (data?.room.mode === "2v2") return;
@@ -168,6 +178,7 @@ export function RoomClient({
     roomCode,
     joinRoom,
     joining,
+    submitting,
     pendingRequestId,
     data?.room.mode,
   ]);
@@ -193,13 +204,13 @@ export function RoomClient({
 
   async function onJoin(e: FormEvent) {
     e.preventDefault();
-    if (!clientId || joining) return;
+    if (!clientId || joining || submitting) return;
     const trimmed = (pendingJoinName || name).trim();
     if (!trimmed) {
       setJoinError("Enter your name");
       return;
     }
-    setJoining(true);
+    setSubmitting(true);
     setJoinError(null);
     try {
       storeName(trimmed);
@@ -216,7 +227,7 @@ export function RoomClient({
     } catch (err) {
       setJoinError(formatConvexError(err, "Could not join"));
     } finally {
-      setJoining(false);
+      setSubmitting(false);
     }
   }
 
@@ -238,17 +249,18 @@ export function RoomClient({
       clearLocal: () => {
         setJoinError(null);
         setJoining(false);
+        setSubmitting(false);
         setPendingRequestId(null);
       },
     });
   }
 
   if (roomCode.length === 6 && roomLoading && clientId) {
-    return <StatusText>Connecting…</StatusText>;
+    return <Loader fill label="Connecting…" />;
   }
 
   if (!clientId) {
-    return <StatusText>Starting session…</StatusText>;
+    return <Loader fill label="Starting session…" />;
   }
 
   if (roomCode.length !== 6 || roomMissing) {
@@ -296,7 +308,7 @@ export function RoomClient({
 
   if (!hasMe) {
     if (joining) {
-      return <StatusText>Joining room…</StatusText>;
+      return <Loader fill label="Joining room…" />;
     }
     if (rankedRoom) {
       return (
@@ -415,6 +427,7 @@ export function RoomClient({
           <Button
             type="submit"
             variant="primary"
+            loading={submitting}
             disabled={
               joining ||
               !joinNameReady ||
@@ -438,7 +451,7 @@ export function RoomClient({
   }
 
   if (!hasMe || !data) {
-    return <StatusText>Joining room…</StatusText>;
+    return <Loader fill label="Joining room…" />;
   }
 
   if (offline) {
@@ -455,14 +468,18 @@ export function RoomClient({
   return (
     <>
       {data.room.status === "lobby" ? (
-        <Lobby
-          data={data}
-          roomId={data.room._id}
-          clientId={clientId}
-          code={data.room.code}
-        />
+        <div key="lobby" className="route-in">
+          <Lobby
+            data={data}
+            roomId={data.room._id}
+            clientId={clientId}
+            code={data.room.code}
+          />
+        </div>
       ) : (
-        <GameScreen data={data} roomId={data.room._id} clientId={clientId} />
+        <div key="game" className="route-in">
+          <GameScreen data={data} roomId={data.room._id} clientId={clientId} />
+        </div>
       )}
       {!data.room.vsComputer && mePlayer && (
         <VoicePanel

@@ -71,7 +71,7 @@ export function AuthPanel() {
   }
 
   return (
-    <section className={styles.panel} aria-label="Account">
+    <section className={`${styles.panel} swap-in`} aria-label="Account">
       <div className={styles.tabs} role="tablist" aria-label="Account mode">
         <button
           type="button"
@@ -152,7 +152,8 @@ export function AuthPanel() {
         <Button
           type="submit"
           variant="primary"
-          disabled={busy || !username.trim() || !password}
+          loading={busy}
+          disabled={!username.trim() || !password}
         >
           {tab === "login" ? "Log in" : "Create account"}
         </Button>

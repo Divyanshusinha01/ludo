@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { useRouter } from "next/navigation";
 import { api } from "../../convex/_generated/api";
@@ -38,6 +38,9 @@ export function MatchmakingPanel({ disabled = false }: { disabled?: boolean }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(0);
+  const [navigating, startNavigation] = useTransition();
+  const goToRoom = (code: string, roomId: string) =>
+    startNavigation(() => router.push(roomHref(code, roomId)));
   /** Only the tab that pressed Find match jumps into the room when matched. */
   const searchingHere = useRef(false);
 
@@ -85,7 +88,7 @@ export function MatchmakingPanel({ disabled = false }: { disabled?: boolean }) {
     try {
       const result = await joinQueue({ clientId, queue });
       if (result.status === "matched" || result.status === "inGame") {
-        router.push(roomHref(result.code, result.roomId));
+        goToRoom(result.code, result.roomId);
         return;
       }
       searchingHere.current = true;
@@ -103,7 +106,7 @@ export function MatchmakingPanel({ disabled = false }: { disabled?: boolean }) {
     try {
       const result = await leaveQueue({});
       searchingHere.current = false;
-      if (result.status === "matched") router.push(roomHref(result.code, result.roomId));
+      if (result.status === "matched") goToRoom(result.code, result.roomId);
     } catch (err) {
       setError(formatConvexError(err, "Could not cancel"));
     } finally {
@@ -130,7 +133,8 @@ export function MatchmakingPanel({ disabled = false }: { disabled?: boolean }) {
         <Button
           type="button"
           variant="primary"
-          onClick={() => router.push(roomHref(status.code, status.roomId))}
+          loading={navigating}
+          onClick={() => goToRoom(status.code, status.roomId)}
         >
           Rejoin game
         </Button>
@@ -147,7 +151,12 @@ export function MatchmakingPanel({ disabled = false }: { disabled?: boolean }) {
             {formatElapsed(now ? now - status.joinedAt : 0)}
           </span>
         </p>
-        <Button type="button" variant="secondary" disabled={busy} onClick={() => void onCancel()}>
+        <Button
+          type="button"
+          variant="secondary"
+          loading={busy || navigating}
+          onClick={() => void onCancel()}
+        >
           Cancel search
         </Button>
         <ErrorText>{error}</ErrorText>
@@ -176,7 +185,8 @@ export function MatchmakingPanel({ disabled = false }: { disabled?: boolean }) {
       <Button
         type="button"
         variant="primary"
-        disabled={disabled || busy || !clientId || status === undefined}
+        loading={busy || navigating}
+        disabled={disabled || !clientId || status === undefined}
         onClick={() => void onFind()}
       >
         Find match

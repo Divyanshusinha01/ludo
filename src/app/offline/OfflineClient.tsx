@@ -11,7 +11,7 @@ import {
   saveOfflineGame,
   subscribeOfflineGame,
 } from "@/lib/offline/storage";
-import { Button } from "@/components/ui";
+import { Button, Loader } from "@/components/ui";
 import { BoardHeroImage } from "@/components/BoardHeroImage";
 import styles from "@/components/HomeScreen.module.css";
 
@@ -20,6 +20,8 @@ type Mode = "prompt" | "setup" | "game";
 function readHasSavedGame(): boolean {
   return loadOfflineGame() !== null;
 }
+
+const noopSubscribe = () => () => {};
 
 export function OfflineClient() {
   const router = useRouter();
@@ -33,13 +35,19 @@ export function OfflineClient() {
     readHasSavedGame,
     () => false,
   );
-  const [mode, setMode] = useState<Mode>("setup");
+  // The save lives in localStorage, so the server can't know which screen to
+  // show; waiting for hydration avoids flashing setup before the resume prompt.
+  const hydrated = useSyncExternalStore(
+    noopSubscribe,
+    () => true,
+    () => false,
+  );
+  const [chosenMode, setMode] = useState<Mode | null>(null);
+  const mode: Mode = chosenMode ?? (hasSavedGame ? "prompt" : "setup");
 
   useEffect(() => {
-    if (hasSavedGame) {
-      setMode((current) => (current === "setup" ? "prompt" : current));
-    }
-  }, [hasSavedGame]);
+    router.prefetch("/");
+  }, [router]);
 
   const startGame = useCallback((initial: OfflineGameState) => {
     saveOfflineGame(initial);
@@ -58,9 +66,13 @@ export function OfflineClient() {
     setMode("game");
   }, []);
 
+  if (!hydrated) {
+    return <Loader fill label="Setting up the table…" />;
+  }
+
   if (mode === "prompt" && hasSavedGame) {
     return (
-      <div className={styles.shell}>
+      <div key="prompt" className={`${styles.shell} swap-in`}>
         <div className={styles.hero}>
           <BoardHeroImage />
           <p className={styles.brand}>Play offline</p>
@@ -89,36 +101,28 @@ export function OfflineClient() {
     );
   }
 
-  if (mode === "game" && !state) {
-    return (
-      <OfflineSetup
-        onStart={(initial) => {
-          startGame(initial);
-          setMode("game");
-        }}
-        onBack={() => router.push("/")}
-      />
-    );
-  }
-
   if (mode === "setup" || !state) {
     return (
-      <OfflineSetup
-        onStart={(initial) => {
-          startGame(initial);
-          setMode("game");
-        }}
-        onBack={() => router.push("/")}
-      />
+      <div key="setup" className="swap-in">
+        <OfflineSetup
+          onStart={(initial) => {
+            startGame(initial);
+            setMode("game");
+          }}
+          onBack={() => router.push("/")}
+        />
+      </div>
     );
   }
 
   return (
-    <OfflineGameScreen
-      onStartNew={() => {
-        resetGame();
-        setMode("setup");
-      }}
-    />
+    <div key="game" className="route-in">
+      <OfflineGameScreen
+        onStartNew={() => {
+          resetGame();
+          setMode("setup");
+        }}
+      />
+    </div>
   );
 }

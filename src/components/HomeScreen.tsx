@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { bindAudioUnlock } from "@/lib/sounds";
 import { InstallHint } from "./InstallHint";
@@ -21,6 +21,7 @@ export function HomeScreen() {
   const router = useRouter();
   const [mode, setMode] = useState<"home" | HomeOnlineMode>("home");
   const [offline, setOffline] = useState(false);
+  const [openingOffline, startOfflineNav] = useTransition();
 
   useEffect(() => {
     bindAudioUnlock();
@@ -46,6 +47,8 @@ export function HomeScreen() {
   useEffect(() => {
     const prefetch = () => {
       void import("./HomeOnlineGate");
+      void import("./HomeOnlineFlow");
+      router.prefetch("/offline");
     };
     const win = window as Window & {
       requestIdleCallback?: (
@@ -60,7 +63,7 @@ export function HomeScreen() {
     }
     const id = window.setTimeout(prefetch, 1200);
     return () => window.clearTimeout(id);
-  }, []);
+  }, [router]);
 
   return (
     <div className={`${styles.shell} ${styles.home}`}>
@@ -92,7 +95,7 @@ export function HomeScreen() {
       </div>
 
       {mode === "home" ? (
-        <div className={styles.actions}>
+        <div key="home" className={`${styles.actions} swap-in`}>
           <nav className={styles.modes} aria-label="Game modes">
             <ModeRow
               color="red"
@@ -112,7 +115,8 @@ export function HomeScreen() {
               color="green"
               name="Play Offline"
               desc="Pass one device around the table"
-              onClick={() => router.push("/offline")}
+              pending={openingOffline}
+              onClick={() => startOfflineNav(() => router.push("/offline"))}
             />
           </nav>
           {offline && (
@@ -124,6 +128,7 @@ export function HomeScreen() {
         </div>
       ) : (
         <HomeOnlineGate
+          key="online"
           mode={mode}
           offline={offline}
           onModeChange={setMode}
@@ -140,12 +145,14 @@ function ModeRow({
   name,
   desc,
   disabled,
+  pending = false,
   onClick,
 }: {
   color: "red" | "green" | "yellow" | "blue";
   name: string;
   desc: string;
   disabled?: boolean;
+  pending?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -153,16 +160,21 @@ function ModeRow({
       type="button"
       className={styles.mode}
       disabled={disabled}
-      onClick={onClick}
+      aria-busy={pending || undefined}
+      onClick={pending ? undefined : onClick}
     >
       <span className={`${styles.modeToken} ${styles[color]}`} aria-hidden="true" />
       <span className={styles.modeText}>
         <span className={styles.modeName}>{name}</span>
         <span className={styles.modeDesc}>{desc}</span>
       </span>
-      <span className={styles.modeArrow} aria-hidden="true">
-        →
-      </span>
+      {pending ? (
+        <span className={styles.modeSpinner} aria-hidden="true" />
+      ) : (
+        <span className={styles.modeArrow} aria-hidden="true">
+          →
+        </span>
+      )}
     </button>
   );
 }

@@ -5,14 +5,14 @@ import Link from "next/link";
 import { useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { GameError } from "../../../../convex/lib/errors";
-import { StatusText } from "@/components/ui";
+import { Loader } from "@/components/ui";
 import { useSpectatorPresence } from "@/hooks/useSpectatorPresence";
 import { normalizeCode, useSessionId } from "@/lib/player";
 import styles from "../../room/[code]/room.module.css";
 
 const GameScreen = dynamic(
   () => import("@/components/GameScreen").then((m) => m.GameScreen),
-  { loading: () => <StatusText>Loading game…</StatusText> },
+  { loading: () => <Loader fill label="Loading game…" /> },
 );
 
 export function SpectateClient({ code }: { code: string }) {
@@ -37,7 +37,7 @@ export function SpectateClient({ code }: { code: string }) {
   }
 
   if (data === undefined || !spectatorId) {
-    return <StatusText>Connecting…</StatusText>;
+    return <Loader fill label="Connecting…" />;
   }
 
   if (status === "lobby") {
@@ -64,11 +64,13 @@ export function SpectateClient({ code }: { code: string }) {
   }
 
   return (
-    <GameScreen
-      data={data.view}
-      roomId={data.view.room._id}
-      clientId={spectatorId}
-      spectate={{ count: data.spectators }}
-    />
+    <div className="route-in">
+      <GameScreen
+        data={data.view}
+        roomId={data.view.room._id}
+        clientId={spectatorId}
+        spectate={{ count: data.spectators }}
+      />
+    </div>
   );
 }

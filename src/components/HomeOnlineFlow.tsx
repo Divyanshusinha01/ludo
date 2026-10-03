@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState, useTransition } from "react";
 import { useMutation } from "convex/react";
 import { useRouter } from "next/navigation";
 import { api } from "../../convex/_generated/api";
@@ -42,7 +42,13 @@ export function HomeOnlineFlow({ mode, offline, onModeChange }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [troubleBusy, setTroubleBusy] = useState(false);
+  const [navigating, startNavigation] = useTransition();
   const clientId = useSessionId();
+  const pending = busy || navigating;
+
+  useEffect(() => {
+    if (mode === "join" && code.length === 6) router.prefetch(`/room/${code}`);
+  }, [mode, code, router]);
 
   async function onTroubleshoot() {
     if (!clientId || troubleBusy || isTroubleshootCoolingDown()) return;
@@ -82,7 +88,9 @@ export function HomeOnlineFlow({ mode, offline, onModeChange }: Props) {
         name: trimmed,
         mode: gameMode,
       });
-      router.push(`/room/${res.code}?rid=${res.roomId}`);
+      startNavigation(() => {
+        router.push(`/room/${res.code}?rid=${res.roomId}`);
+      });
     } catch (err) {
       setError(formatConvexError(err, "Failed to create"));
     } finally {
@@ -106,11 +114,13 @@ export function HomeOnlineFlow({ mode, offline, onModeChange }: Props) {
       setError("Enter a 6-character room code");
       return;
     }
-    router.push(`/room/${normalized}`);
+    startNavigation(() => {
+      router.push(`/room/${normalized}`);
+    });
   }
 
   return (
-    <>
+    <div key={mode} className={`${styles.actions} swap-in`}>
       {mode === "online" ? (
         <div className={styles.actions}>
           <Button
@@ -195,7 +205,8 @@ export function HomeOnlineFlow({ mode, offline, onModeChange }: Props) {
           <Button
             type="submit"
             variant="primary"
-            disabled={busy || offline || !name.trim() || !clientId}
+            loading={pending}
+            disabled={offline || !name.trim() || !clientId}
           >
             Create game
           </Button>
@@ -234,9 +245,8 @@ export function HomeOnlineFlow({ mode, offline, onModeChange }: Props) {
           <Button
             type="submit"
             variant="primary"
-            disabled={
-              busy || offline || !name.trim() || code.length !== 6 || !clientId
-            }
+            loading={pending}
+            disabled={offline || !name.trim() || code.length !== 6 || !clientId}
           >
             Join room
           </Button>
@@ -259,6 +269,6 @@ export function HomeOnlineFlow({ mode, offline, onModeChange }: Props) {
       >
         {error}
       </ErrorText>
-    </>
+    </div>
   );
 }

@@ -7,7 +7,8 @@ import { useRouter } from "next/navigation";
 import { api } from "../../convex/_generated/api";
 import { QUEUES } from "../../convex/lib/matchmaking";
 import { COLOR_HEX, normalizeCode } from "@/lib/player";
-import { Button, StatusText } from "./ui";
+import { Button } from "./ui";
+import { fadeInClass, LoadingLabel, Skeleton } from "./Skeleton";
 import listStyles from "./MatchHistory.module.css";
 import styles from "./HomeScreen.module.css";
 
@@ -28,11 +29,27 @@ export function LiveGames({ limit = 10 }: { limit?: number }) {
     <section className={listStyles.section} aria-labelledby="live-games-title">
       <h2 id="live-games-title" className={listStyles.heading}>Watch live</h2>
       {games === undefined ? (
-        <StatusText>Loading live games…</StatusText>
+        <>
+          <LoadingLabel>Loading live games…</LoadingLabel>
+          <ul className={listStyles.list} aria-hidden="true">
+            {[0, 1].map((i) => (
+              <li key={i} className={`${listStyles.row} ${listStyles.skeletonRow}`}>
+                <div className={listStyles.main}>
+                  <Skeleton width="65%" height="0.95rem" />
+                  <Skeleton width="40%" height="0.7rem" />
+                </div>
+                <span />
+                <Skeleton width="2.5rem" height="0.9rem" />
+              </li>
+            ))}
+          </ul>
+        </>
       ) : games.length === 0 ? (
-        <p className={listStyles.empty}>No ranked games in progress right now.</p>
+        <p className={`${listStyles.empty} ${fadeInClass}`}>
+          No ranked games in progress right now.
+        </p>
       ) : (
-        <ul className={listStyles.list}>
+        <ul className={`${listStyles.list} ${fadeInClass}`}>
           {games.map((g) => (
             <li key={g.code} className={listStyles.row}>
               <div className={listStyles.main}>
