@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useId, useState } from "react";
 import Link from "next/link";
 import { Button, ErrorText } from "./ui";
 import { logIn, logOut, signUp, useAuthState } from "@/lib/auth";
@@ -19,6 +19,8 @@ export function AuthPanel() {
   const [tabChoice, setTab] = useState<Tab | null>(null);
   const [usernameDraft, setUsername] = useState<string | null>(null);
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const passwordId = useId();
   const [displayName, setDisplayName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -85,6 +87,7 @@ export function AuthPanel() {
     setBusy(false);
     if (result.ok) {
       setPassword("");
+      setShowPassword(false);
       setUsername(null);
       setDisplayName("");
     } else {
@@ -133,17 +136,32 @@ export function AuthPanel() {
             maxLength={20}
           />
         </label>
-        <label className={styles.field}>
-          Password
-          <input
-            name="password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete={tab === "login" ? "current-password" : "new-password"}
-            maxLength={256}
-          />
-        </label>
+        <div className={styles.field}>
+          <label htmlFor={passwordId}>Password</label>
+          <div className={styles.passwordWrap}>
+            <input
+              id={passwordId}
+              name="password"
+              type={showPassword ? "text" : "password"}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete={tab === "login" ? "current-password" : "new-password"}
+              autoCapitalize="none"
+              spellCheck={false}
+              maxLength={256}
+            />
+            <button
+              type="button"
+              className={styles.reveal}
+              aria-label={showPassword ? "Hide password" : "Show password"}
+              aria-pressed={showPassword}
+              aria-controls={passwordId}
+              onClick={() => setShowPassword((v) => !v)}
+            >
+              {showPassword ? "Hide" : "Show"}
+            </button>
+          </div>
+        </div>
         {tab === "signup" && (
           <label className={styles.field}>
             Display name (optional)

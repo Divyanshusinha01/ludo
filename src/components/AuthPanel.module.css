@@ -97,6 +97,42 @@
   border-color: var(--accent);
 }
 
+.passwordWrap {
+  position: relative;
+  display: flex;
+}
+
+.passwordWrap input {
+  flex: 1;
+  min-width: 0;
+  padding-right: 4.5rem;
+}
+
+.reveal {
+  position: absolute;
+  top: 50%;
+  right: 0.4rem;
+  transform: translateY(-50%);
+  appearance: none;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.reveal:hover {
+  background: rgba(30, 24, 16, 0.06);
+}
+
+.reveal:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .hint {
   margin: 0;
   font-size: 0.8rem;
