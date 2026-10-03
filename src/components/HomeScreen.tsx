@@ -63,7 +63,7 @@ export function HomeScreen() {
   }, []);
 
   return (
-    <div className={styles.shell}>
+    <div className={`${styles.shell} ${styles.home}`}>
       <div className={styles.hero}>
         <p className={styles.brand}>
           <span className={styles.brandLudo}>Ludo</span>

@@ -1,0 +1,31 @@
+.main {
+  position: relative;
+  min-height: 100dvh;
+  padding: max(1.25rem, env(safe-area-inset-top))
+    max(1.25rem, env(safe-area-inset-right))
+    max(1.25rem, env(safe-area-inset-bottom))
+    max(1.25rem, env(safe-area-inset-left));
+}
+
+.header {
+  display: flex;
+  justify-content: flex-end;
+  min-height: 2.6rem;
+}
+
+@media (max-width: 600px) {
+  .main {
+    padding: max(1rem, env(safe-area-inset-top))
+      max(1rem, env(safe-area-inset-right))
+      max(1rem, env(safe-area-inset-bottom))
+      max(1rem, env(safe-area-inset-left));
+  }
+
+  .header {
+    position: absolute;
+    top: max(1rem, env(safe-area-inset-top));
+    right: max(1rem, env(safe-area-inset-right));
+    min-height: 0;
+    z-index: 2;
+  }
+}
