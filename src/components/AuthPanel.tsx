@@ -1,16 +1,15 @@
 "use client";
 
 import { FormEvent, useId, useState } from "react";
-import Link from "next/link";
 import { Button, ErrorText } from "./ui";
-import { logIn, logOut, signUp, useAuthState } from "@/lib/auth";
+import { logIn, signUp, useAuthState } from "@/lib/auth";
 import styles from "./AuthPanel.module.css";
 
 type Tab = "login" | "signup";
 
 /**
- * Optional account sign-in. A remembered device shows the signed-in state
- * with no form; after logout or expiry the login form is prefilled with the
+ * Optional account sign-in. Renders nothing once signed in (the profile menu
+ * takes over); after logout or expiry the login form is prefilled with the
  * last username. Anonymous play never needs this.
  */
 export function AuthPanel() {
@@ -33,31 +32,7 @@ export function AuthPanel() {
     );
   }
 
-  if (auth.status === "signedIn" && auth.profile) {
-    return (
-      <section className={styles.panel} aria-label="Account">
-        <div className={styles.signedIn}>
-          <p className={styles.who}>
-            Signed in as <strong>{auth.profile.displayName}</strong>{" "}
-            <span className={styles.handle}>@{auth.profile.username}</span>
-          </p>
-          <div className={styles.links}>
-            <Link href="/profile">Profile</Link>
-            <button
-              type="button"
-              className={styles.linkButton}
-              onClick={() => {
-                setPassword("");
-                void logOut();
-              }}
-            >
-              Log out
-            </button>
-          </div>
-        </div>
-      </section>
-    );
-  }
+  if (auth.status === "signedIn") return null;
 
   const remembered = auth.lastUsername;
   const tab: Tab = tabChoice ?? (remembered ? "login" : "signup");

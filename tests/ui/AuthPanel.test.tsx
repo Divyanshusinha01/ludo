@@ -65,12 +65,10 @@ const signedInToken: Route = {
 const rejected: Route = { status: 401, body: { ok: false, error: "unauthorized" } };
 
 describe("AuthPanel", () => {
-  it("a remembered device shows the signed-in state with no form", async () => {
+  it("a remembered device renders nothing", async () => {
     routes["/api/auth/token"] = signedInToken;
-    render(<AuthPanel />);
-    expect(await screen.findByText(/Signed in as/)).toHaveTextContent("Signed in as Divsi @divsi");
-    expect(screen.queryByLabelText("Password")).toBeNull();
-    expect(screen.getByRole("link", { name: "Profile" })).toHaveAttribute("href", "/profile");
+    const { container } = render(<AuthPanel />);
+    await waitFor(() => expect(container).toBeEmptyDOMElement());
     expect(calls).toEqual([{ url: "/api/auth/token", method: "GET", body: undefined }]);
   });
 
@@ -82,8 +80,7 @@ describe("AuthPanel", () => {
         <HomeOnlineFlow mode="create" offline={false} onModeChange={() => {}} />
       </>,
     );
-    await screen.findByText(/Signed in as/);
-    expect(screen.getByLabelText("Your name")).toHaveValue("Divsi");
+    await waitFor(() => expect(screen.getByLabelText("Your name")).toHaveValue("Divsi"));
   });
 
   it("a rejected session shows login with the last username prefilled", async () => {
@@ -103,7 +100,7 @@ describe("AuthPanel", () => {
     expect(screen.getByRole("tab", { name: "Sign up" })).toHaveAttribute("aria-selected", "true");
   });
 
-  it("login posts credentials, then shows the signed-in state", async () => {
+  it("login posts credentials, then hides the panel", async () => {
     document.cookie = "ludo_last_username=divsi; path=/";
     routes["/api/auth/token"] = [rejected, signedInToken];
     routes["/api/auth/login"] = {
@@ -115,7 +112,7 @@ describe("AuthPanel", () => {
       target: { value: "pw12345678" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Log in" }));
-    expect(await screen.findByText(/Signed in as/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByLabelText("Password")).toBeNull());
     const loginCall = calls.find((c) => c.url === "/api/auth/login")!;
     expect(loginCall).toEqual({
       url: "/api/auth/login",
