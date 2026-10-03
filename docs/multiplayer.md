@@ -175,6 +175,11 @@ Settlement writes one `matches` row and one `matchParticipants` row per account
 (names, colours, queue, end reason) with no dependency on the room, so they
 survive room cleanup (`deleteRoomCascade`, the 6h finished TTL).
 
+Finished private code rooms are recorded too (`kind: "private"`, `rated: false`,
+delta 0, real winner kept). A private room can rematch, so it gets one row per
+finished game; ranked rooms stay at one row per room. Abandoned private games
+are not recorded. Rows written before `kind` existed read as `"ranked"`.
+
 `convex/history.ts`:
 
 - `listMine`: the signed-in account's matches, newest first, paginated (empty

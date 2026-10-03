@@ -2,7 +2,7 @@ import type { MutationCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import { teamOfColor, type Color } from "./ludo";
 import { logEvent } from "./log";
-import type { QueueName } from "./matchmaking";
+import type { MatchKind, QueueName } from "./matchmaking";
 import { computeRatingChanges, type RatingInput } from "./rating";
 import type { LudoEvent } from "./game";
 import type { GameState } from "./game/state";
@@ -55,7 +55,7 @@ export async function settleRankedRoom(
     rated.length < 2 ||
     (isTeamGame && state.winningTeam === null);
   if (voided) {
-    await recordMatch(ctx, room, state, reason, now, false, rated.map((entry) => ({
+    await recordMatch(ctx, room, state, reason, now, "ranked", false, rated.map((entry) => ({
       ...entry,
       ratingBefore: entry.profile.rating,
       ratingAfter: entry.profile.rating,
@@ -75,7 +75,7 @@ export async function settleRankedRoom(
   }));
   const changes = computeRatingChanges(inputs);
 
-  await recordMatch(ctx, room, state, reason, now, true, changes.map((change) => ({
+  await recordMatch(ctx, room, state, reason, now, "ranked", true, changes.map((change) => ({
     ...rated.find((r) => r.profile.accountId === change.key)!,
     ratingBefore: change.ratingBefore,
     ratingAfter: change.ratingAfter,
@@ -113,8 +113,9 @@ export async function settleRankedRoom(
 
 /**
  * Add a finished private / vs-computer game to each signed-in seat's profile
- * stats. Ratings are untouched. Runs once per game: the caller only invokes it
- * on the commit that moves the room from playing to finished.
+ * stats and match history. Ratings are untouched. Runs once per game: the
+ * caller only invokes it on the commit that moves the room from playing to
+ * finished, so rematches in the same room each get their own history entry.
  */
 export async function recordUnrankedStats(
   ctx: MutationCtx,
@@ -125,9 +126,19 @@ export async function recordUnrankedStats(
 ): Promise<void> {
   if (state.phase !== "finished") return;
   if (reason !== null && VOID_REASONS.has(reason)) return;
-  for (const entry of await accountSeatResults(ctx, roomId, state)) {
+  const room = await ctx.db.get(roomId);
+  if (!room) return;
+  const entries = await accountSeatResults(ctx, roomId, state);
+  for (const entry of entries) {
     await ctx.db.patch(entry.profile._id, gameStatsPatch(entry, now));
   }
+  const kind: MatchKind = room.vsComputer ? "computer" : "private";
+  await recordMatch(ctx, room, state, reason, now, kind, false, entries.map((entry) => ({
+    ...entry,
+    ratingBefore: entry.profile.rating,
+    ratingAfter: entry.profile.rating,
+    delta: 0,
+  })));
 }
 
 type SeatResult = {
@@ -194,8 +205,9 @@ function queueOf(room: Doc<"rooms">, state: GameState): QueueName {
 }
 
 /**
- * Write the self-contained history snapshot for a settled ranked room.
- * `matches.by_room` keeps it to one row per room even if called twice.
+ * Write the self-contained history snapshot for a finished room. Ranked rooms
+ * host one game, so `matches.by_room` keeps them to one row even if called
+ * twice; private rooms can rematch and get a row per game.
  */
 async function recordMatch(
   ctx: MutationCtx,
@@ -203,16 +215,21 @@ async function recordMatch(
   state: GameState,
   reason: FinishReason | null,
   now: number,
+  kind: MatchKind,
   rated: boolean,
   rows: ParticipantRow[],
 ): Promise<void> {
   if (rows.length === 0) return;
-  const existing = await ctx.db
-    .query("matches")
-    .withIndex("by_room", (q) => q.eq("roomId", room._id))
-    .first();
-  if (existing) return;
+  if (kind === "ranked") {
+    const existing = await ctx.db
+      .query("matches")
+      .withIndex("by_room", (q) => q.eq("roomId", room._id))
+      .first();
+    if (existing) return;
+  }
 
+  // A voided ranked game has no result; an unranked game keeps its real winner.
+  const hasResult = rated || kind !== "ranked";
   const queue = queueOf(room, state);
   const matchId = await ctx.db.insert("matches", {
     roomId: room._id,
@@ -223,7 +240,8 @@ async function recordMatch(
     finishedAt: now,
     endReason: reason,
     rated,
-    winnerAccountIds: rated ? rows.filter((r) => r.won).map((r) => r.profile.accountId) : [],
+    kind,
+    winnerAccountIds: hasResult ? rows.filter((r) => r.won).map((r) => r.profile.accountId) : [],
   });
   for (const row of rows) {
     const team = row.seat.team ?? (state.mode === "2v2" ? teamOfColor(row.seat.color as Color) : undefined);
@@ -235,12 +253,13 @@ async function recordMatch(
       color: row.seat.color,
       ...(team ? { team } : {}),
       placement: row.placement,
-      won: rated && row.won,
+      won: hasResult && row.won,
       ratingBefore: row.ratingBefore,
       ratingAfter: row.ratingAfter,
       delta: row.delta,
       queue,
       rated,
+      kind,
       finishedAt: now,
     });
   }

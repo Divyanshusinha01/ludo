@@ -6,6 +6,7 @@ type Entry = {
   matchId: string;
   queue: "duel" | "ffa4" | "team2v2";
   rated: boolean;
+  kind: "ranked" | "private" | "computer";
   finishedAt: number;
   color: "red";
   placement: number;
@@ -35,6 +36,7 @@ function entry(over: Partial<Entry>): Entry {
     matchId: "m1",
     queue: "duel",
     rated: true,
+    kind: "ranked",
     finishedAt: Date.UTC(2026, 9, 1, 12),
     color: "red",
     placement: 1,
@@ -60,7 +62,25 @@ describe("MatchHistory", () => {
 
   it("shows an empty state", () => {
     render(<MatchHistory />);
-    expect(screen.getByText(/No ranked games yet/)).toBeInTheDocument();
+    expect(screen.getByText(/No games yet/)).toBeInTheDocument();
+  });
+
+  it("labels private and vs-computer games with their result and no rating", () => {
+    paginated.results = [
+      entry({ matchId: "m2", kind: "computer", rated: false, won: true, placement: 1, delta: 0 }),
+      entry({ matchId: "m1", kind: "private", queue: "ffa4", rated: false, won: false, placement: 2, delta: 0 }),
+    ];
+    render(<MatchHistory />);
+    const rows = within(screen.getByRole("list")).getAllByRole("listitem");
+
+    expect(rows[0]).toHaveTextContent("vs Computer");
+    expect(rows[0]).toHaveTextContent("Won");
+    expect(rows[0]).toHaveTextContent("Unrated");
+    expect(within(rows[0]!).queryByLabelText("Rating change")).toBeNull();
+
+    expect(rows[1]).toHaveTextContent("Private room");
+    expect(rows[1]).toHaveTextContent("2nd");
+    expect(within(rows[1]!).queryByLabelText("Rating change")).toBeNull();
   });
 
   it("lists games with outcome, rating change and new rating", () => {
@@ -129,6 +149,7 @@ describe("RatingResultBanner", () => {
     queue: "duel",
     mode: "1v1",
     rated,
+    kind: "ranked",
     endReason: rated ? "sole_survivor" : "abandoned",
     startedAt: 1,
     finishedAt: 2,

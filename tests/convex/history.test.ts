@@ -169,7 +169,7 @@ describe("match persistence", () => {
     expect(page.page).toEqual([expect.objectContaining({ rated: false, delta: 0 })]);
   });
 
-  it("unrated private rooms and vs-computer games write no history", async () => {
+  it("private rooms write unrated history with the real result", async () => {
     const [a, b] = (await queuePlayers(t, 2)) as [QueuePlayer, QueuePlayer];
     const created = await a.user.mutation(api.rooms.createRoom, { clientId: a.clientId, name: "" });
     if (!("roomId" in created)) throw new Error("pending");
@@ -178,12 +178,17 @@ describe("match persistence", () => {
     await leave(created.roomId, a);
     expect((await rawRoom(t, created.roomId))?.status).toBe("finished");
 
-    const solo = await a.user.mutation(api.rooms.createVsComputer, { clientId: a.clientId, name: "", botCount: 1 });
-    if (!("roomId" in solo)) throw new Error("pending");
-    await leave(solo.roomId, a);
-
-    expect(await allMatches()).toEqual({ matches: [], participants: [] });
-    expect((await historyOf(a)).page).toEqual([]);
+    const { matches, participants } = await allMatches();
+    expect(matches).toEqual([
+      expect.objectContaining({ kind: "private", rated: false, winnerAccountIds: [b.accountId] }),
+    ]);
+    expect(participants).toHaveLength(2);
+    expect((await historyOf(a)).page).toEqual([
+      expect.objectContaining({ kind: "private", rated: false, won: false, delta: 0 }),
+    ]);
+    expect((await historyOf(b)).page).toEqual([
+      expect.objectContaining({ kind: "private", rated: false, won: true, delta: 0 }),
+    ]);
   });
 });
 

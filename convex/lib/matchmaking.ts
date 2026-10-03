@@ -10,6 +10,15 @@ export const queueValidator = v.union(
 
 export type QueueName = Infer<typeof queueValidator>;
 
+/** How a recorded match was played: matchmaker game, private code room, or vs computer. */
+export const matchKindValidator = v.union(
+  v.literal("ranked"),
+  v.literal("private"),
+  v.literal("computer"),
+);
+
+export type MatchKind = Infer<typeof matchKindValidator>;
+
 export const QUEUE_NAMES: QueueName[] = ["duel", "ffa4", "team2v2"];
 
 export const QUEUES: Record<QueueName, { size: number; mode: GameMode; label: string }> = {

@@ -1,6 +1,7 @@
 "use client";
 
 import { usePaginatedQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { api } from "../../convex/_generated/api";
 import { QUEUES } from "../../convex/lib/matchmaking";
 import { Button, StatusText } from "./ui";
@@ -19,6 +20,14 @@ function ordinal(n: number): string {
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 
+type HistoryEntry = FunctionReturnType<typeof api.history.listMine>["page"][number];
+
+function gameLabel(entry: HistoryEntry): string {
+  if (entry.kind === "computer") return "vs Computer";
+  if (entry.kind === "private") return entry.queue === "team2v2" ? "Private room · 2v2" : "Private room";
+  return QUEUES[entry.queue].label;
+}
+
 export function MatchHistory() {
   const { results, status, loadMore } = usePaginatedQuery(
     api.history.listMine,
@@ -32,11 +41,12 @@ export function MatchHistory() {
     <section className={styles.section} aria-labelledby="history-title">
       <h2 id="history-title" className={styles.heading}>Match history</h2>
       {results.length === 0 ? (
-        <p className={styles.empty}>No ranked games yet — find a match from the home screen.</p>
+        <p className={styles.empty}>No games yet — play a match from the home screen.</p>
       ) : (
         <ol className={styles.list}>
           {results.map((entry) => {
-            const outcome = !entry.rated
+            const ranked = entry.kind === "ranked";
+            const outcome = ranked && !entry.rated
               ? "Unrated"
               : entry.queue === "team2v2"
                 ? entry.won ? "Team won" : "Team lost"
@@ -45,7 +55,7 @@ export function MatchHistory() {
             return (
               <li key={entry.matchId} className={styles.row}>
                 <div className={styles.main}>
-                  <span className={styles.queue}>{QUEUES[entry.queue].label}</span>
+                  <span className={styles.queue}>{gameLabel(entry)}</span>
                   <span className={styles.meta}>
                     <time dateTime={new Date(entry.finishedAt).toISOString()}>
                       {dateFormat.format(entry.finishedAt)}
@@ -53,12 +63,18 @@ export function MatchHistory() {
                   </span>
                 </div>
                 <span className={styles.outcome}>{outcome}</span>
-                <span className={styles.rating}>
-                  <span className={deltaClass} aria-label="Rating change">
-                    {entry.rated ? formatDelta(entry.delta) : "±0"}
+                {ranked ? (
+                  <span className={styles.rating}>
+                    <span className={deltaClass} aria-label="Rating change">
+                      {entry.rated ? formatDelta(entry.delta) : "±0"}
+                    </span>
+                    <span className={styles.meta}>{entry.ratingAfter}</span>
                   </span>
-                  <span className={styles.meta}>{entry.ratingAfter}</span>
-                </span>
+                ) : (
+                  <span className={styles.rating}>
+                    <span className={styles.meta}>Unrated</span>
+                  </span>
+                )}
               </li>
             );
           })}

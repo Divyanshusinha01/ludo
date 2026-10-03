@@ -225,7 +225,36 @@ describe("unrated games", () => {
         gamesPlayed: 1,
         wins: p === b ? 1 : 0,
       });
+      const history = await p.user.query(api.history.listMine, {
+        paginationOpts: { numItems: 10, cursor: null },
+      });
+      expect(history.page).toHaveLength(1);
+      expect(history.page[0]).toMatchObject({
+        kind: "private",
+        rated: false,
+        won: p === b,
+        delta: 0,
+        ratingAfter: INITIAL_RATING,
+      });
     }
+  });
+
+  it("each finished game in the same private room gets its own history entry", async () => {
+    const [a, b] = (await queuePlayers(t, 2)) as [QueuePlayer, QueuePlayer];
+    const created = await a.user.mutation(api.rooms.createRoom, { clientId: a.clientId, name: "" });
+    if (!("roomId" in created)) throw new Error("pending");
+    await b.user.mutation(api.rooms.joinRoom, { code: created.code, clientId: b.clientId, name: "" });
+    await t.mutation(api.rooms.startGame, { roomId: created.roomId, clientId: a.clientId });
+    await t.run(async (ctx) => {
+      const fresh = (await ctx.db.get(created.roomId))!;
+      const state = await loadGameState(ctx, fresh);
+      await recordUnrankedStats(ctx, created.roomId, { ...state, phase: "finished" }, "sole_survivor", 1);
+      await recordUnrankedStats(ctx, created.roomId, { ...state, phase: "finished" }, "sole_survivor", 2);
+    });
+    const history = await a.user.query(api.history.listMine, {
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+    expect(history.page.map((e) => e.finishedAt)).toEqual([2, 1]);
   });
 
   it("an abandoned private game is not counted", async () => {
@@ -241,6 +270,10 @@ describe("unrated games", () => {
     });
     for (const p of [a, b]) {
       expect(await profileOf(p.accountId)).toMatchObject({ gamesPlayed: 0, wins: 0 });
+      const history = await p.user.query(api.history.listMine, {
+        paginationOpts: { numItems: 10, cursor: null },
+      });
+      expect(history.page).toHaveLength(0);
     }
   });
 
@@ -257,5 +290,8 @@ describe("unrated games", () => {
     expect(room?.ranked).toBeUndefined();
     expect(room?.ratingSettledAt).toBeUndefined();
     expect(await profileOf(a.accountId)).toMatchObject({ rating: INITIAL_RATING, ratedGames: 0 });
-  });
-});
+    const history = await a.user.query(api.history.listMine, {
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+    expect(history.page).toEqual([]);
+  });});

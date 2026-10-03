@@ -6,7 +6,7 @@ import type { QueryCtx } from "./_generated/server";
 import { optionalAccount } from "./lib/auth";
 import { colorValidator } from "./lib/colors";
 import { finishReasonValidator } from "./lib/game/eventValidators";
-import { queueValidator } from "./lib/matchmaking";
+import { matchKindValidator, queueValidator } from "./lib/matchmaking";
 
 export const LEADERBOARD_DEFAULT = 20;
 export const LEADERBOARD_MAX = 50;
@@ -19,6 +19,7 @@ const historyEntryValidator = v.object({
   matchId: v.id("matches"),
   queue: queueValidator,
   rated: v.boolean(),
+  kind: matchKindValidator,
   finishedAt: v.number(),
   color: colorValidator,
   team: v.optional(teamValidator),
@@ -46,6 +47,7 @@ const matchDetailValidator = v.object({
   queue: queueValidator,
   mode: v.union(v.literal("1v1"), v.literal("2v2")),
   rated: v.boolean(),
+  kind: matchKindValidator,
   endReason: v.union(finishReasonValidator, v.null()),
   startedAt: v.number(),
   finishedAt: v.number(),
@@ -66,6 +68,7 @@ function toHistoryEntry(p: Doc<"matchParticipants">) {
     matchId: p.matchId,
     queue: p.queue,
     rated: p.rated,
+    kind: p.kind ?? "ranked",
     finishedAt: p.finishedAt,
     color: p.color,
     ...(p.team ? { team: p.team } : {}),
@@ -102,6 +105,7 @@ async function matchDetail(ctx: QueryCtx, match: Doc<"matches">) {
     queue: match.queue,
     mode: match.mode,
     rated: match.rated,
+    kind: match.kind ?? "ranked",
     endReason: match.endReason,
     startedAt: match.startedAt,
     finishedAt: match.finishedAt,
@@ -109,7 +113,7 @@ async function matchDetail(ctx: QueryCtx, match: Doc<"matches">) {
   };
 }
 
-/** The caller's ranked games, newest first. Anonymous callers get an empty page. */
+/** The caller's recorded games (ranked, private, vs computer), newest first. Anonymous callers get an empty page. */
 export const listMine = query({
   args: { paginationOpts: paginationOptsValidator },
   returns: paginationResultValidator(historyEntryValidator),

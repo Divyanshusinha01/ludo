@@ -10,7 +10,7 @@ import {
 
 export { colorValidator } from "./lib/colors";
 import { colorValidator } from "./lib/colors";
-import { queueValidator } from "./lib/matchmaking";
+import { matchKindValidator, queueValidator } from "./lib/matchmaking";
 
 export const tokenValidator = v.object({
   index: v.number(),
@@ -245,6 +245,8 @@ export default defineSchema({
     endReason: v.union(finishReasonValidator, v.null()),
     /** False when the game closed with no rating change (e.g. abandoned). */
     rated: v.boolean(),
+    /** Absent on rows written before unranked games were recorded = "ranked". */
+    kind: v.optional(matchKindValidator),
     winnerAccountIds: v.array(v.id("accounts")),
   })
     .index("by_room", ["roomId"])
@@ -265,6 +267,7 @@ export default defineSchema({
     delta: v.number(),
     queue: queueValidator,
     rated: v.boolean(),
+    kind: v.optional(matchKindValidator),
     finishedAt: v.number(),
   })
     .index("by_account_finishedAt", ["accountId", "finishedAt"])
