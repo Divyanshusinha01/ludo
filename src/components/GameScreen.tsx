@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation } from "convex/react";
 import { useRouter } from "next/navigation";
 import { api } from "../../convex/_generated/api";
@@ -45,6 +45,7 @@ import {
   runTroubleshoot,
 } from "@/lib/troubleshoot";
 import type { RoomBundle } from "./Lobby";
+import { PlayerProfileCard } from "./PlayerProfileCard";
 import { RatingResultBanner } from "./RatingResultBanner";
 import { RejoinRequests } from "./RejoinRequests";
 import styles from "./GameScreen.module.css";
@@ -128,6 +129,10 @@ export function GameScreen({ data, roomId, clientId, spectate }: Props) {
   const [winBurstKey, setWinBurstKey] = useState(0);
   const rollLock = useRef(false);
   const moveLock = useRef(false);
+  const [profilePlayerId, setProfilePlayerId] = useState<Id<"players"> | null>(
+    null,
+  );
+  const closeProfile = useCallback(() => setProfilePlayerId(null), []);
 
   useRoomPresence(roomId, clientId, !readOnly);
   const reporter = useOpsReporter(roomId, clientId, !readOnly);
@@ -917,12 +922,8 @@ export function GameScreen({ data, roomId, clientId, spectate }: Props) {
           const teammateName = teammate
             ? players.find((x) => x.color === teammate)?.name
             : null;
-          return (
-            <li
-              key={p._id}
-              className={`${styles.player} ${isActive ? styles.active : ""} ${!p.connected && !p.isBot ? styles.away : ""} ${p.eliminated ? styles.eliminated : ""} ${finished ? styles.finished : ""}`}
-              style={{ ["--c" as string]: COLOR_HEX[p.color as Color] }}
-            >
+          const content = (
+            <>
               <span className={styles.swatch} />
               <span className={styles.playerMeta}>
                 <span className={styles.playerName}>
@@ -952,10 +953,44 @@ export function GameScreen({ data, roomId, clientId, spectate }: Props) {
                   </span>
                 )}
               </span>
+            </>
+          );
+          return (
+            <li
+              key={p._id}
+              className={`${styles.player} ${isActive ? styles.active : ""} ${!p.connected && !p.isBot ? styles.away : ""} ${p.eliminated ? styles.eliminated : ""} ${finished ? styles.finished : ""}`}
+              style={{ ["--c" as string]: COLOR_HEX[p.color as Color] }}
+            >
+              {p.isBot ? (
+                content
+              ) : (
+                <button
+                  type="button"
+                  className={styles.playerButton}
+                  aria-haspopup="dialog"
+                  title={`View ${p.name}'s profile`}
+                  onClick={() => setProfilePlayerId(p._id)}
+                >
+                  {content}
+                </button>
+              )}
             </li>
           );
         })}
       </ul>
+
+      {profilePlayerId &&
+        (() => {
+          const p = players.find((x) => x._id === profilePlayerId);
+          return p ? (
+            <PlayerProfileCard
+              playerId={p._id}
+              name={p.name}
+              color={COLOR_HEX[p.color as Color]}
+              onClose={closeProfile}
+            />
+          ) : null;
+        })()}
 
       {room.status === "playing" && (
         <div

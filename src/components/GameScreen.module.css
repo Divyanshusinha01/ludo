@@ -267,6 +267,31 @@
   min-height: 2.15rem;
 }
 
+.playerButton {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: inherit;
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.playerButton:focus-visible {
+  outline: 2px solid var(--c);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
 .active {
   outline: 2px solid var(--c);
   background: rgba(255, 255, 255, 0.85);

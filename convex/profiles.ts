@@ -26,3 +26,19 @@ export const getPublic = query({
     return profile ? toPublicProfile(profile) : null;
   },
 });
+
+/** Public profile of the account seated as `playerId`; null for guests and bots. */
+export const getForPlayer = query({
+  args: { playerId: v.id("players") },
+  returns: v.union(publicProfileValidator, v.null()),
+  handler: async (ctx, args) => {
+    const player = await ctx.db.get(args.playerId);
+    if (!player?.accountId || player.isBot) return null;
+    const accountId = player.accountId;
+    const profile = await ctx.db
+      .query("profiles")
+      .withIndex("by_account", (q) => q.eq("accountId", accountId))
+      .unique();
+    return profile ? toPublicProfile(profile) : null;
+  },
+});
