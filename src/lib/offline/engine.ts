@@ -141,7 +141,7 @@ function assignFinishRank(
   const seat = seatByColor(next, color);
   if (!seat) fail("Seat not found");
 
-  let rankings = [...next.rankings];
+  const rankings = [...next.rankings];
   if (seat.finishRank != null) {
     return { state: next, rankings };
   }
@@ -172,7 +172,7 @@ function maybeFinishAutomaticLoser(
   if (!loser) return { state, finished: false };
 
   const next = cloneState(state);
-  let rankings = [...next.rankings];
+  const rankings = [...next.rankings];
   if (!rankings.includes(loser.color)) {
     rankings.push(loser.color);
   }
@@ -208,7 +208,7 @@ function maybeFinishAllRanked(
   }
 
   const next = cloneState(state);
-  let rankings =
+  const rankings =
     next.rankings.length > 0
       ? [...next.rankings]
       : buildFinalRankings(
@@ -472,7 +472,7 @@ function executeRoll(
   }
 
   if (decision.kind === "no_moves_six") {
-    let next = cloneState(state);
+    const next = cloneState(state);
     next.diceValue = value;
     next.diceRolled = false;
     next.consecutiveSixes = decision.consecutiveSixes;
@@ -494,7 +494,7 @@ function executeRoll(
     return { state: next, result: { value, skipped: true, legalMoves } };
   }
 
-  let next = cloneState(state);
+  const next = cloneState(state);
   next.diceValue = value;
   next.diceRolled = true;
   next.consecutiveSixes = decision.consecutiveSixes;

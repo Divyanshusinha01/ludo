@@ -87,14 +87,8 @@ function DieMesh({
   rolling?: boolean;
 }) {
   const group = useRef<THREE.Group>(null);
-  const spinAxis = useRef(
-    new THREE.Vector3(
-      Math.random() - 0.5,
-      Math.random() - 0.5,
-      Math.random() - 0.5,
-    ).normalize(),
-  );
-  const spinSpeed = useRef(12 + Math.random() * 6);
+  const spinAxis = useRef(new THREE.Vector3(1, 1, 1).normalize());
+  const spinSpeed = useRef(15);
   const settling = useRef(false);
   const settleFrom = useRef(new THREE.Quaternion());
   const settleTo = useRef(new THREE.Quaternion());
