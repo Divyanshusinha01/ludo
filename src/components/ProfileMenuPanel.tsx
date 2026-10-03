@@ -1,10 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useConvexAuth, useQuery } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { ConvexClientProvider } from "./ConvexClientProvider";
-import { ProfileStats } from "./ProfileStats";
+import { ProfileStats, ProfileStatsSkeleton } from "./ProfileStats";
 import { logOut, useAuthState } from "@/lib/auth";
 import styles from "./ProfileMenu.module.css";
 
@@ -20,8 +20,7 @@ export function ProfileMenuPanel(props: Props) {
 
 function PanelBody({ onClose }: Props) {
   const auth = useAuthState();
-  const { isAuthenticated } = useConvexAuth();
-  const profile = useQuery(api.profiles.getMine, isAuthenticated ? {} : "skip");
+  const profile = useQuery(api.profiles.getMine, auth.status === "signedIn" ? {} : "skip");
 
   return (
     <>
@@ -29,13 +28,7 @@ function PanelBody({ onClose }: Props) {
         <p className={styles.name}>{profile?.displayName ?? auth.profile?.displayName}</p>
         <p className={styles.handle}>@{auth.profile?.username}</p>
       </div>
-      {profile ? (
-        <ProfileStats profile={profile} />
-      ) : (
-        <p className={styles.status} role="status">
-          Loading stats…
-        </p>
-      )}
+      {profile ? <ProfileStats profile={profile} /> : <ProfileStatsSkeleton />}
       <div className={styles.footer}>
         <Link href="/profile" onClick={onClose}>
           Full profile

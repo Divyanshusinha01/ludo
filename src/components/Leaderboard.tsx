@@ -2,16 +2,21 @@
 
 import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
-import { StatusText } from "./ui";
+import { ListSkeleton } from "./ListSkeleton";
+import { fadeInClass } from "./Skeleton";
 import styles from "./MatchHistory.module.css";
+
+export function LeaderboardSkeleton() {
+  return <ListSkeleton title="Leaderboard" label="Loading leaderboard…" rows={5} />;
+}
 
 export function Leaderboard({ limit = 20, highlight }: { limit?: number; highlight?: string }) {
   const entries = useQuery(api.history.leaderboard, { limit });
 
-  if (entries === undefined) return <StatusText>Loading leaderboard…</StatusText>;
+  if (entries === undefined) return <LeaderboardSkeleton />;
 
   return (
-    <section className={styles.section} aria-labelledby="leaderboard-title">
+    <section className={`${styles.section} ${fadeInClass}`} aria-labelledby="leaderboard-title">
       <h2 id="leaderboard-title" className={styles.heading}>Leaderboard</h2>
       {entries.length === 0 ? (
         <p className={styles.empty}>No rated games played yet.</p>

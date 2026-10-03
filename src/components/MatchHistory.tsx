@@ -4,6 +4,8 @@ import { usePaginatedQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "../../convex/_generated/api";
 import { QUEUES } from "../../convex/lib/matchmaking";
+import { ListSkeleton } from "./ListSkeleton";
+import { fadeInClass } from "./Skeleton";
 import { Button, StatusText } from "./ui";
 import styles from "./MatchHistory.module.css";
 
@@ -28,6 +30,10 @@ function gameLabel(entry: HistoryEntry): string {
   return QUEUES[entry.queue].label;
 }
 
+export function MatchHistorySkeleton() {
+  return <ListSkeleton title="Match history" label="Loading match history…" />;
+}
+
 export function MatchHistory() {
   const { results, status, loadMore } = usePaginatedQuery(
     api.history.listMine,
@@ -35,10 +41,10 @@ export function MatchHistory() {
     { initialNumItems: PAGE_SIZE },
   );
 
-  if (status === "LoadingFirstPage") return <StatusText>Loading match history…</StatusText>;
+  if (status === "LoadingFirstPage") return <MatchHistorySkeleton />;
 
   return (
-    <section className={styles.section} aria-labelledby="history-title">
+    <section className={`${styles.section} ${fadeInClass}`} aria-labelledby="history-title">
       <h2 id="history-title" className={styles.heading}>Match history</h2>
       {results.length === 0 ? (
         <p className={styles.empty}>No games yet — play a match from the home screen.</p>

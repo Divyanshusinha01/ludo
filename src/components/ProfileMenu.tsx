@@ -3,17 +3,14 @@
 import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { useAuthState } from "@/lib/auth";
+import { ProfileStatsSkeleton } from "./ProfileStats";
 import styles from "./ProfileMenu.module.css";
 
 const ProfileMenuPanel = dynamic(
   () => import("./ProfileMenuPanel").then((m) => m.ProfileMenuPanel),
   {
     ssr: false,
-    loading: () => (
-      <p className={styles.status} role="status">
-        Loading stats…
-      </p>
-    ),
+    loading: () => <ProfileStatsSkeleton />,
   },
 );
 

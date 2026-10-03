@@ -77,6 +77,10 @@
   color: var(--muted);
 }
 
+.skeletonRow {
+  min-height: 3.1rem;
+}
+
 .rank {
   width: 1.75rem;
   font-family: var(--font-display);

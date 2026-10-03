@@ -41,11 +41,11 @@ export function AuthPanel() {
 
   if (!open) {
     return (
-      <section className={styles.panel} aria-label="Account">
-        <Button type="button" variant="secondary" onClick={() => setExpanded(true)}>
+      <section className={styles.collapsed} aria-label="Account">
+        <button type="button" className={styles.signInLink} onClick={() => setExpanded(true)}>
           Sign in or create account
-        </Button>
-        <p className={styles.hint}>Optional — keeps your name and stats on this device.</p>
+        </button>
+        <span className={styles.hint}>Optional — keeps your name and stats.</span>
       </section>
     );
   }

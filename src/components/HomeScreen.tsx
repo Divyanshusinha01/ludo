@@ -2,13 +2,20 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Button } from "./ui";
 import { bindAudioUnlock } from "@/lib/sounds";
 import { InstallHint } from "./InstallHint";
 import { AuthPanel } from "./AuthPanel";
 import { HomeOnlineGate } from "./HomeOnlineGate";
 import type { HomeOnlineMode } from "./HomeOnlineFlow";
 import styles from "./HomeScreen.module.css";
+
+const TRACK_CELLS = 13;
+const TRACK_TOKENS = [
+  { cell: 1, color: "red", delay: 0 },
+  { cell: 4, color: "green", delay: 120 },
+  { cell: 8, color: "yellow", delay: 240 },
+  { cell: 11, color: "blue", delay: 360 },
+] as const;
 
 export function HomeScreen() {
   const router = useRouter();
@@ -58,45 +65,56 @@ export function HomeScreen() {
   return (
     <div className={styles.shell}>
       <div className={styles.hero}>
-        <p className={styles.brand}>Family Ludo</p>
-        <h1 className={styles.headline}>Family phones. One board.</h1>
+        <p className={styles.brand}>
+          <span className={styles.brandLudo}>Ludo</span>
+        </p>
+        <div className={styles.track} aria-hidden="true">
+          {Array.from({ length: TRACK_CELLS }, (_, i) => {
+            const token = TRACK_TOKENS.find((t) => t.cell === i);
+            return (
+              <span key={i} className={styles.cell}>
+                {token && (
+                  <span
+                    className={`${styles.token} ${styles[token.color]}`}
+                    style={{ animationDelay: `${token.delay}ms` }}
+                  />
+                )}
+              </span>
+            );
+          })}
+        </div>
+        <h1 className={styles.headline}>Pass the dice, not the phone.</h1>
         <p className={styles.sub}>
-          Create a room, share the code, and play with 2–4 people in realtime —
-          or play offline on one device.
+          Open a room, share the code, and race 2–4 friends in realtime. Want
+          new rivals? Jump into Multiplayer to get matched with players
+          worldwide. No signal? Huddle round one device and play offline.
         </p>
       </div>
 
       {mode === "home" ? (
         <div className={styles.actions}>
-          <Button
-            type="button"
-            variant="primary"
-            disabled={offline}
-            onClick={() => {
-              if (offline) return;
-              setMode("online");
-            }}
-          >
-            Play Online
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            disabled={offline}
-            onClick={() => {
-              if (offline) return;
-              setMode("multiplayer");
-            }}
-          >
-            Play Multiplayer
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => router.push("/offline")}
-          >
-            Play Offline
-          </Button>
+          <nav className={styles.modes} aria-label="Game modes">
+            <ModeRow
+              color="red"
+              name="Private Room"
+              desc={offline ? "Needs internet" : "Share a code with 2–4 friends"}
+              disabled={offline}
+              onClick={() => setMode("online")}
+            />
+            <ModeRow
+              color="blue"
+              name="Play Multiplayer"
+              desc={offline ? "Needs internet" : "Get matched with players worldwide"}
+              disabled={offline}
+              onClick={() => setMode("multiplayer")}
+            />
+            <ModeRow
+              color="green"
+              name="Play Offline"
+              desc="Pass one device around the table"
+              onClick={() => router.push("/offline")}
+            />
+          </nav>
           {offline && (
             <p className={styles.hint} role="status">
               No internet — online play is unavailable. Use Play Offline.
@@ -114,5 +132,37 @@ export function HomeScreen() {
 
       <InstallHint />
     </div>
+  );
+}
+
+function ModeRow({
+  color,
+  name,
+  desc,
+  disabled,
+  onClick,
+}: {
+  color: "red" | "green" | "yellow" | "blue";
+  name: string;
+  desc: string;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={styles.mode}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      <span className={`${styles.modeToken} ${styles[color]}`} aria-hidden="true" />
+      <span className={styles.modeText}>
+        <span className={styles.modeName}>{name}</span>
+        <span className={styles.modeDesc}>{desc}</span>
+      </span>
+      <span className={styles.modeArrow} aria-hidden="true">
+        →
+      </span>
+    </button>
   );
 }

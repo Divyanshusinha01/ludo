@@ -8,6 +8,40 @@
   background: rgba(255, 255, 255, 0.45);
 }
 
+.collapsed {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.signInLink {
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 0.5rem 0.75rem;
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 4px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.signInLink:hover {
+  text-decoration-color: var(--accent-ink);
+}
+
+.signInLink:focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
 .tabs {
   display: flex;
   gap: 0.5rem;

@@ -2,13 +2,14 @@
 
 import { FormEvent, useState } from "react";
 import Link from "next/link";
-import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { AuthPanel } from "@/components/AuthPanel";
-import { Leaderboard } from "@/components/Leaderboard";
-import { MatchHistory } from "@/components/MatchHistory";
-import { ProfileStats } from "@/components/ProfileStats";
-import { Button, ErrorText, StatusText } from "@/components/ui";
+import { Leaderboard, LeaderboardSkeleton } from "@/components/Leaderboard";
+import { MatchHistory, MatchHistorySkeleton } from "@/components/MatchHistory";
+import { ProfileStats, ProfileStatsSkeleton } from "@/components/ProfileStats";
+import { Skeleton } from "@/components/Skeleton";
+import { Button, ErrorText } from "@/components/ui";
 import {
   changePassword,
   logOut,
@@ -20,8 +21,9 @@ import styles from "./profile.module.css";
 
 export function ProfileClient() {
   const auth = useAuthState();
-  const { isAuthenticated } = useConvexAuth();
-  const profile = useQuery(api.profiles.getMine, isAuthenticated ? {} : "skip");
+  // The Convex client sends the token ahead of queued queries, so there is no
+  // need to wait a round-trip for useConvexAuth() to confirm it first.
+  const profile = useQuery(api.profiles.getMine, auth.status === "signedIn" ? {} : "skip");
   const updateDisplayName = useMutation(api.auth.updateDisplayName);
 
   const [nameDraft, setNameDraft] = useState<string | null>(null);
@@ -35,7 +37,7 @@ export function ProfileClient() {
   const [pwMessage, setPwMessage] = useState<string | null>(null);
   const [pwError, setPwError] = useState<string | null>(null);
 
-  if (auth.status === "loading") return <StatusText>Loading profile…</StatusText>;
+  if (auth.status === "loading") return <ProfileSkeleton />;
 
   if (auth.status === "signedOut") {
     return (
@@ -89,13 +91,9 @@ export function ProfileClient() {
       <h1 className={styles.title}>{profile?.displayName ?? auth.profile?.displayName}</h1>
       <p className={styles.muted}>@{auth.profile?.username}</p>
 
-      {profile ? (
-        <ProfileStats profile={profile} />
-      ) : (
-        <StatusText>Loading stats…</StatusText>
-      )}
+      {profile ? <ProfileStats profile={profile} /> : <ProfileStatsSkeleton />}
 
-      {isAuthenticated && <MatchHistory />}
+      <MatchHistory />
       <Leaderboard highlight={auth.profile?.username} />
 
       <form className={styles.form} onSubmit={onSaveName} aria-label="Display name">
@@ -153,6 +151,18 @@ export function ProfileClient() {
           Log out
         </Button>
       </div>
+    </div>
+  );
+}
+
+function ProfileSkeleton() {
+  return (
+    <div className={styles.shell} aria-busy="true">
+      <Skeleton width="60%" height="2.4rem" />
+      <Skeleton width="35%" height="1.2rem" />
+      <ProfileStatsSkeleton />
+      <MatchHistorySkeleton />
+      <LeaderboardSkeleton />
     </div>
   );
 }
