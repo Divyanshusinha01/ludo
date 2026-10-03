@@ -91,6 +91,7 @@ async function playToCompletion(client: ConvexHttpClient) {
         roomId,
         clientId,
         turnId,
+        expectedSeq: state!.room.eventSeq,
       });
       if (roll.skipped || !roll.legalMoves?.length) continue;
     }
@@ -112,6 +113,7 @@ async function playToCompletion(client: ConvexHttpClient) {
       tokenIndex: pick.index,
       ...(pick.color ? { tokenColor: pick.color } : {}),
       turnId: fresh!.room.turnId,
+      expectedSeq: fresh!.room.eventSeq,
     });
   }
 

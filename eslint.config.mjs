@@ -6,6 +6,39 @@ const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
   // Override default ignores of eslint-config-next.
+  {
+    files: ["convex/lib/game/**/*.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "../../_generated/server",
+              message: "Pure game module must not import Convex server.",
+            },
+            {
+              name: "../_generated/server",
+              message: "Pure game module must not import Convex server.",
+            },
+          ],
+          patterns: ["**/_generated/**", "convex/server"],
+        },
+      ],
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "NewExpression[callee.name='Date']",
+          message: "No Date in pure game reducer.",
+        },
+        {
+          selector:
+            "MemberExpression[object.name='Math'][property.name='random']",
+          message: "No Math.random in pure game reducer.",
+        },
+      ],
+    },
+  },
   globalIgnores([
     // Default ignores of eslint-config-next:
     ".next/**",

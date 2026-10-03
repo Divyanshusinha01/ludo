@@ -35,6 +35,7 @@ export const GameError = {
   passNotAllowed: "Pass is only available in 2v2 team mode",
   invalidPassTarget: "That's not your teammate's home",
   passNothingToPass: "Roll first — nothing to pass yet",
+  legacyRoom: "Start a new game — this room is no longer supported",
 } as const;
 
 export type GameErrorMessage = (typeof GameError)[keyof typeof GameError];
