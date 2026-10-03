@@ -5,8 +5,18 @@
 import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { ConvexHttpClient } from "convex/browser";
+import type { FunctionReturnType } from "convex/server";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
+import {
+  createEmptyState,
+  diffGameStates,
+  replayWithTrace,
+  type GameState,
+} from "../convex/lib/game";
+import type { LudoEvent } from "../convex/lib/game/eventValidators";
+
+type RoomBundle = NonNullable<FunctionReturnType<typeof api.rooms.getRoom>>;
 
 function loadEnvLocal() {
   try {
@@ -55,6 +65,109 @@ async function expectReject(
 
 async function sleep(ms: number) {
   await new Promise((r) => setTimeout(r, ms));
+}
+
+async function listAllEvents(
+  client: ConvexHttpClient,
+  roomId: Id<"rooms">,
+  clientId: string,
+): Promise<LudoEvent[]> {
+  const events: LudoEvent[] = [];
+  let afterSeq: number | undefined;
+  for (;;) {
+    const page = await client.query(api.gameEvents.listEvents, {
+      roomId,
+      clientId,
+      afterSeq,
+    });
+    events.push(...(page.events as LudoEvent[]));
+    if (page.nextAfterSeq === null) return events;
+    afterSeq = page.nextAfterSeq;
+  }
+}
+
+/**
+ * The public bundle omits rulesVersion, sixStreakSnapshot and settle, so those
+ * are taken from the replayed state; every exposed field is compared.
+ */
+function liveStateFromBundle(
+  bundle: RoomBundle,
+  hidden: Pick<GameState, "rulesVersion" | "sixStreakSnapshot" | "settle">,
+): GameState {
+  const { room } = bundle;
+  return {
+    ...hidden,
+    phase: room.status,
+    mode: room.mode,
+    vsComputer: room.vsComputer,
+    seats: bundle.players.map((p) => ({
+      color: p.color,
+      name: p.name,
+      isBot: p.isBot,
+      team: p.team ?? undefined,
+      lives: p.lives,
+      eliminated: p.eliminated,
+      finishRank: p.finishRank,
+    })),
+    tokens: bundle.tokens.map((t) => ({
+      color: t.color,
+      index: t.index,
+      steps: t.steps,
+    })),
+    currentTurn: room.currentTurn,
+    diceValue: room.diceValue,
+    diceRolled: room.diceRolled,
+    consecutiveSixes: room.consecutiveSixes,
+    passedRollTo: room.passedRollTo,
+    turnNumber: room.turnId,
+    rankings: room.rankings,
+    winner: room.winner,
+    winningTeam: room.winningTeam,
+    finishedAt: room.finishedAt,
+  };
+}
+
+/**
+ * Replays the room's full event log locally and asserts it reproduces the
+ * state served by getRoom. Retries when a scheduled job (bot, timeout) commits
+ * between the reads.
+ */
+async function assertLiveMatchesReplay(
+  client: ConvexHttpClient,
+  roomId: Id<"rooms">,
+  clientId: string,
+  label: string,
+): Promise<number> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const before = await client.query(api.rooms.getRoom, { roomId, clientId });
+    assert(before, `${label}: room exists`);
+    const events = await listAllEvents(client, roomId, clientId);
+    const after = await client.query(api.rooms.getRoom, { roomId, clientId });
+    if (after?.room.eventSeq !== before.room.eventSeq) {
+      await sleep(200);
+      continue;
+    }
+
+    const tailSeq = events.at(-1)?.seq ?? 0;
+    assert(
+      tailSeq === before.room.eventSeq,
+      `${label}: log ends at seq ${tailSeq} but room head is ${before.room.eventSeq}`,
+    );
+    const trace = replayWithTrace(createEmptyState(), events);
+    if (trace.error) {
+      const { seq, eventType, reason } = trace.error;
+      throw new Error(`${label}: replay failed at seq ${seq} (${eventType}): ${reason}`);
+    }
+    const replayed = trace.states[trace.states.length - 1]!;
+    const live = liveStateFromBundle(before, replayed);
+    const diffs = diffGameStates(live, replayed);
+    assert(
+      diffs.length === 0,
+      `${label}: live state differs from replay:\n  ${diffs.join("\n  ")}`,
+    );
+    return events.length;
+  }
+  throw new Error(`${label}: event head kept moving; could not take a stable snapshot`);
 }
 
 async function main() {
@@ -121,6 +234,9 @@ async function main() {
     "session ids not leaked",
   );
   mark("start 2p + session ids not in public players");
+
+  await assertLiveMatchesReplay(client, roomId, host1, "2p start");
+  mark("2p event log replays to live state");
 
   console.log("\n=== 2. Room capacity / join security ===");
   const h4 = sid();
@@ -274,11 +390,24 @@ async function main() {
     roomId: roomId4,
     clientId: h4,
   });
-  assert(afterRoll!.room.diceValue === roll.value, "server dice matches");
-  // After a skip, turn advances and diceRolled is cleared; otherwise dice stays pending.
+  // A skipped roll ends the turn and TURN_STARTED clears the die, so the face
+  // survives only in the event log.
   if (roll.skipped) {
     assert(afterRoll!.room.diceRolled === false, "skipped roll clears diceRolled");
+    assert(afterRoll!.room.diceValue === null, "skipped roll clears diceValue");
+    assert(afterRoll!.room.turnId > turnId, "skipped roll advances the turn");
+    const rolled = (await listAllEvents(client, roomId4, h4)).filter(
+      (e): e is Extract<LudoEvent, { eventType: "DICE_ROLLED" }> =>
+        e.eventType === "DICE_ROLLED",
+    );
+    assert(
+      rolled.length === 1 &&
+        rolled[0]!.payload.color === "red" &&
+        rolled[0]!.payload.value === roll.value,
+      "skipped roll recorded once in event log with server dice",
+    );
   } else {
+    assert(afterRoll!.room.diceValue === roll.value, "server dice matches");
     assert(afterRoll!.room.diceRolled === true, "pending move keeps diceRolled");
   }
   mark("dice authored server-side (client cannot set face)");
@@ -353,6 +482,14 @@ async function main() {
   } else {
     mark("concurrent moves (skipped — no legal moves this roll)");
   }
+
+  const raceEvents = await assertLiveMatchesReplay(
+    client,
+    roomId4,
+    h4,
+    "4p after races",
+  );
+  mark(`4p event log (${raceEvents} events) replays to live state after races`);
 
   console.log("\n=== 4. Input validation ===");
   await expectReject("empty room code", () =>
@@ -465,6 +602,8 @@ async function main() {
     clientId: finishHost,
   });
   assert(finished?.room.status === "finished", "forfeit finishes game");
+  await assertLiveMatchesReplay(client, fr.roomId, finishHost, "forfeit");
+  mark("forfeited game replays to live state");
   await expectReject(
     "join finished",
     () =>
@@ -610,6 +749,9 @@ async function main() {
     "game still valid after bot think window",
   );
   mark("bot turn scheduler does not break room");
+
+  await assertLiveMatchesReplay(client, botRoom.roomId, botHost, "bot game");
+  mark("bot game event log replays to live state");
 
   console.log("\n=== 9. Brief pause for action interval ===");
   await sleep(120);

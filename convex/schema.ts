@@ -119,6 +119,11 @@ export default defineSchema({
     isBot: v.optional(v.boolean()),
     /** Manual team pick in 2v2 lobby (host is always Team A). */
     team: v.optional(v.union(v.literal("A"), v.literal("B"))),
+    /**
+     * Set when the player left a started match. The seat stays (it is part of
+     * the event-sourced game state) but no longer counts as present.
+     */
+    leftAt: v.optional(v.number()),
   })
     .index("by_room", ["roomId"])
     .index("by_room_client", ["roomId", "clientId"])

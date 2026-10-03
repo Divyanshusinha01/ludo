@@ -7,11 +7,19 @@ import {
   MAX_TRACK_STEPS,
   TokenState,
   absoluteTrackPosition,
+  allTokensInYard,
   findCaptureTargets,
   getLegalMoves,
+  getLegalMovesForActor,
   isSafeAbsolute,
+  legalMovesForDelegatedRoll,
+  moveControllerColor,
+  rollControllerColor,
+  rollFairDice,
   tryMoveSteps,
 } from "./ludo";
+import type { GameCommand } from "./game/decide";
+import { teamPlayers, type GameState } from "./game/state";
 
 /** Delay before a bot rolls or moves so the UI can show dice / turn change. */
 export const BOT_THINK_MS = 700;
@@ -210,4 +218,51 @@ export function pickBotMove(
   }
 
   return best;
+}
+
+/**
+ * The command the seat that must act now would play, when that seat is a bot.
+ * Null when a human (or nobody) is due to act.
+ */
+export function chooseBotCommand(
+  state: GameState,
+  random: () => number = Math.random,
+): { color: Color; command: GameCommand } | null {
+  if (state.phase !== "playing") return null;
+  const players = teamPlayers(state);
+  const seat = state.currentTurn;
+  const passed = state.passedRollTo;
+  const color =
+    passed ??
+    (state.diceRolled
+      ? moveControllerColor(seat, players, state.mode, null)
+      : rollControllerColor(seat, players, state.mode, null));
+  const bot = state.seats.find((s) => s.color === color);
+  if (!bot?.isBot || bot.eliminated || bot.finishRank != null) return null;
+
+  if (!state.diceRolled) {
+    if (passed !== null) return null;
+    const value = rollFairDice(allTokensInYard(state.tokens, color), random);
+    return { color, command: { type: "RollDice", color, value } };
+  }
+
+  const dice = state.diceValue;
+  if (dice === null) return null;
+  const legal =
+    passed !== null
+      ? legalMovesForDelegatedRoll(state.tokens, passed, dice)
+      : getLegalMovesForActor(state.tokens, color, players, state.mode, dice);
+  if (legal.length === 0) return null;
+  const preferred = pickBotMove(state.tokens, color, dice);
+  const pick =
+    legal.find((m) => m.color === color && m.index === preferred) ?? legal[0]!;
+  return {
+    color,
+    command: {
+      type: "MoveToken",
+      actorColor: color,
+      tokenColor: pick.color,
+      tokenIndex: pick.index,
+    },
+  };
 }

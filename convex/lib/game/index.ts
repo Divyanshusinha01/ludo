@@ -6,3 +6,4 @@ export * from "./decide";
 export * from "./finish";
 export * from "./narrate";
 export * from "./replay";
+export * from "./canonical";

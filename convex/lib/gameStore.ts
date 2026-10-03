@@ -11,11 +11,14 @@ import { BOT_THINK_MS } from "./bot";
 import { GameError, fail } from "./errors";
 import { withEvents } from "./events";
 import {
+  decide,
   describeEvent,
+  diffGameStates,
   eventIdFor,
   LudoEvent,
   LudoEventDraft,
   reduce,
+  type GameCommand,
 } from "./game";
 import type { GameState, GameSeat } from "./game/state";
 
@@ -139,6 +142,7 @@ async function materializeState(
   state: GameState,
   narratedTexts: string[],
   now: number,
+  turnStartedAt: number | undefined,
 ): Promise<void> {
   const players = await ctx.db
     .query("players")
@@ -225,11 +229,29 @@ async function materializeState(
   if (state.phase === "finished" && room.status !== "finished") {
     roomPatch.finishedAt = now;
   }
-  if (state.phase === "playing" && room.status === "lobby") {
-    roomPatch.turnStartedAt = now;
+  if (turnStartedAt !== undefined) {
+    roomPatch.turnStartedAt = turnStartedAt;
   }
 
   await ctx.db.patch(room._id, roomPatch);
+}
+
+/**
+ * The turn clock restarts whenever someone must act afresh: a new turn, an
+ * extra roll (extra turn / six without a move), or a delegated roll. A roll
+ * that leaves a move pending keeps the deadline of the turn it belongs to.
+ */
+function restartsTurnClock(before: GameState, after: GameState): boolean {
+  if (after.phase !== "playing") return false;
+  const rollsAgain =
+    !after.diceRolled &&
+    (before.diceRolled || after.consecutiveSixes !== before.consecutiveSixes);
+  return (
+    before.phase !== "playing" ||
+    after.turnNumber !== before.turnNumber ||
+    after.passedRollTo !== before.passedRollTo ||
+    rollsAgain
+  );
 }
 
 export async function commitEvents(
@@ -248,9 +270,9 @@ export async function commitEvents(
   }
   await assertTailMatchesHead(ctx, room._id, head);
 
-  let state = await loadGameState(ctx, freshRoom);
+  const before = await loadGameState(ctx, freshRoom);
+  let state = before;
   const narrated: string[] = [];
-  let turnBefore = state.turnNumber;
   const committed: LudoEvent[] = [];
 
   for (let i = 0; i < drafts.length; i++) {
@@ -281,27 +303,30 @@ export async function commitEvents(
   }
 
   const newHead = head + drafts.length;
+  const clockRestart = restartsTurnClock(before, state);
+  const turnStartedAt = clockRestart ? opts.now : (freshRoom.turnStartedAt ?? opts.now);
   await ctx.db.patch(room._id, { eventSeq: newHead });
-  await materializeState(ctx, freshRoom, state, narrated, opts.now);
+  await materializeState(
+    ctx,
+    freshRoom,
+    state,
+    narrated,
+    opts.now,
+    clockRestart ? opts.now : undefined,
+  );
 
-  const turnChanged = state.turnNumber !== turnBefore;
-  if (
-    opts.scheduleJobs !== false &&
-    state.phase === "playing" &&
-    (turnChanged || state.diceRolled)
-  ) {
-    await ctx.scheduler.runAfter(
-      TURN_TIMEOUT_MS,
+  // Every in-play commit re-arms both jobs at the new head; jobs armed at an
+  // older head see a different eventSeq and do nothing.
+  if (opts.scheduleJobs !== false && state.phase === "playing") {
+    await ctx.scheduler.runAt(
+      turnStartedAt + TURN_TIMEOUT_MS,
       internal.game.handleTurnTimeout,
-      {
-        roomId: room._id,
-        turnId: state.turnNumber,
-        expectedSeq: newHead,
-      } as { roomId: typeof room._id; turnId: number; expectedSeq?: number },
+      { roomId: room._id, turnId: state.turnNumber, expectedSeq: newHead },
     );
     await ctx.scheduler.runAfter(BOT_THINK_MS, internal.game.playBotTurn, {
       roomId: room._id,
       turnId: state.turnNumber,
+      expectedSeq: newHead,
     });
   }
 
@@ -332,22 +357,28 @@ export async function commitEventsBootstrap(
   return commitEvents(ctx, room, drafts, opts);
 }
 
+/** Decide `command` against the current projection and commit the result. */
+export async function commitCommand(
+  ctx: MutationCtx,
+  room: Doc<"rooms">,
+  command: GameCommand,
+  opts: CommitOptions,
+): Promise<CommitResult> {
+  assertEventSourcedRoom(room);
+  const fresh = await ctx.db.get(room._id);
+  if (!fresh) fail(GameError.roomNotFound);
+  const state = await loadGameState(ctx, fresh);
+  const decision = decide(state, command, { gameId: room._id, createdAt: opts.now });
+  if (!decision.ok) {
+    throw new Error(`${command.type} rejected: ${decision.error.message}`);
+  }
+  return await commitEvents(ctx, fresh, decision.events, opts);
+}
+
+/** Every field where the materialized projection and the replay disagree. */
 export function gameStateDiffSummary(
   materialized: GameState,
   replayed: GameState,
 ): string[] {
-  const diffs: string[] = [];
-  if (materialized.phase !== replayed.phase) {
-    diffs.push(`phase ${materialized.phase} vs ${replayed.phase}`);
-  }
-  if (materialized.turnNumber !== replayed.turnNumber) {
-    diffs.push(`turnNumber ${materialized.turnNumber} vs ${replayed.turnNumber}`);
-  }
-  if (materialized.diceRolled !== replayed.diceRolled) {
-    diffs.push(`diceRolled mismatch`);
-  }
-  if (materialized.currentTurn !== replayed.currentTurn) {
-    diffs.push(`currentTurn mismatch`);
-  }
-  return diffs;
+  return diffGameStates(materialized, replayed);
 }

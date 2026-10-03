@@ -19,19 +19,19 @@ type Props = {
   onBack?: () => void;
 };
 
+function defaultSeats(count: number): SeatDraft[] {
+  return seatingColors(count).map((_, i) => ({
+    name: i === 0 ? "Player 1" : i === 1 ? "Player 2" : `Player ${i + 1}`,
+    isBot: false,
+  }));
+}
+
 export function OfflineSetup({ onStart, onBack }: Props) {
   const [playerCount, setPlayerCount] = useState(2);
   const [seats, setSeats] = useState<SeatDraft[]>(() =>
     defaultSeats(2),
   );
   const [error, setError] = useState<string | null>(null);
-
-  function defaultSeats(count: number): SeatDraft[] {
-    return seatingColors(count).map((_, i) => ({
-      name: i === 0 ? "Player 1" : i === 1 ? "Player 2" : `Player ${i + 1}`,
-      isBot: false,
-    }));
-  }
 
   function setCount(count: number) {
     setPlayerCount(count);

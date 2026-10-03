@@ -30,7 +30,7 @@ import {
   draftTeamHomeWin,
   playableColors,
 } from "./finish";
-import { reduce, reduceAll } from "./reducer";
+import { reduceAll, reducePartial } from "./reducer";
 import type { GameState } from "./state";
 
 /** Opaque room id (Convex Id<"rooms"> at runtime). */
@@ -123,7 +123,7 @@ function appendTurnAdvance(
       payload: { reason },
     }),
   );
-  const sim = reduceAll(
+  const sim = reducePartial(
     state,
     materializeDrafts(gameId, 0, drafts),
   );
@@ -148,7 +148,7 @@ function appendPostMoveFinishes(
   drafts: LudoEventDraft[],
   tokens: TokenState[],
 ): LudoEventDraft[] {
-  let sim = reduceAll(state, materializeDrafts(gameId, 0, drafts));
+  let sim = reducePartial(state, materializeDrafts(gameId, 0, drafts));
   if (!sim.ok) return drafts;
   let simState = sim.state;
   const checks = [
@@ -168,7 +168,7 @@ function appendPostMoveFinishes(
           createdAt,
         });
       }
-      sim = reduceAll(state, materializeDrafts(gameId, 0, drafts));
+      sim = reducePartial(state, materializeDrafts(gameId, 0, drafts));
       if (!sim.ok) break;
       simState = sim.state;
       if (simState.phase === "finished") break;
@@ -191,7 +191,7 @@ export function decide(
         payload: { color: command.color, value: command.value },
       }),
     ];
-    const afterRoll = reduceAll(
+    const afterRoll = reducePartial(
       state,
       materializeDrafts(gameId, 0, drafts),
     );
@@ -307,7 +307,7 @@ export function decide(
         },
       }),
     ];
-    let sim = reduceAll(state, materializeDrafts(gameId, 0, drafts));
+    let sim = reducePartial(state, materializeDrafts(gameId, 0, drafts));
     if (!sim.ok) return { ok: false, error: sim.error };
     const dice = state.diceValue ?? 0;
     const token = state.tokens.find(
@@ -339,7 +339,7 @@ export function decide(
         }),
       );
     }
-    sim = reduceAll(state, materializeDrafts(gameId, 0, drafts));
+    sim = reducePartial(state, materializeDrafts(gameId, 0, drafts));
     if (!sim.ok) return { ok: false, error: sim.error };
 
     const updatedTokens = sim.state.tokens;
@@ -358,7 +358,7 @@ export function decide(
         }),
       );
       appendPostMoveFinishes(state, gameId, createdAt, drafts, updatedTokens);
-      sim = reduceAll(state, materializeDrafts(gameId, 0, drafts));
+      sim = reducePartial(state, materializeDrafts(gameId, 0, drafts));
       if (sim.ok && sim.state.phase !== "finished") {
         appendTurnAdvance(state, gameId, createdAt, "finished", seat, drafts);
       }
@@ -424,7 +424,7 @@ export function decide(
         payload: { color: seat },
       }),
     ];
-    let sim = reduceAll(state, materializeDrafts(gameId, 0, drafts));
+    let sim = reducePartial(state, materializeDrafts(gameId, 0, drafts));
     if (!sim.ok) return { ok: false, error: sim.error };
     const livesSeat = sim.state.seats.find((s) => s.color === actor);
     if (livesSeat && livesSeat.lives <= 0) {
@@ -435,7 +435,7 @@ export function decide(
         }),
       );
       appendPostMoveFinishes(state, gameId, createdAt, drafts, sim.state.tokens);
-      sim = reduceAll(state, materializeDrafts(gameId, 0, drafts));
+      sim = reducePartial(state, materializeDrafts(gameId, 0, drafts));
       if (sim.ok && sim.state.phase !== "finished") {
         appendTurnAdvance(
           state,
@@ -460,6 +460,15 @@ export function decide(
       }),
     ];
     appendPostMoveFinishes(state, gameId, createdAt, drafts, state.tokens);
+    const seat = state.currentTurn;
+    const holdsTurn =
+      command.color === seat ||
+      command.color === turnActorColor(seat, state.seats, state.mode) ||
+      command.color === state.passedRollTo;
+    const sim = reducePartial(state, materializeDrafts(gameId, 0, drafts));
+    if (holdsTurn && sim.ok && sim.state.phase === "playing") {
+      appendTurnAdvance(state, gameId, createdAt, "eliminated", seat, drafts);
+    }
     return simulate(state, gameId, drafts);
   }
 
