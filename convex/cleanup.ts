@@ -3,7 +3,7 @@ import { Id } from "./_generated/dataModel";
 import { buildFinalRankings, Color } from "./lib/ludo";
 import { withEvent } from "./lib/events";
 import { logEvent } from "./lib/log";
-import { clearChatForRoom, clearVoiceForRoom } from "./lib/roomAuth";
+import { clearChatForRoom, clearVoiceForRoom, deleteRoomCascade } from "./lib/roomAuth";
 
 /** Mark away if no heartbeat within this window. */
 const STALE_MS = 45_000;
@@ -183,37 +183,3 @@ export const tick = internalMutation({
   },
 });
 
-async function deleteRoomCascade(ctx: MutationCtx, roomId: Id<"rooms">) {
-  const room = await ctx.db.get(roomId);
-  await clearChatForRoom(ctx, roomId);
-  await clearVoiceForRoom(ctx, roomId);
-  const players = await ctx.db
-    .query("players")
-    .withIndex("by_room", (q) => q.eq("roomId", roomId))
-    .collect();
-  for (const p of players) await ctx.db.delete(p._id);
-
-  const tokens = await ctx.db
-    .query("tokens")
-    .withIndex("by_room", (q) => q.eq("roomId", roomId))
-    .collect();
-  for (const t of tokens) await ctx.db.delete(t._id);
-
-  for (const status of ["pending", "approved", "denied"] as const) {
-    const requests = await ctx.db
-      .query("rejoinRequests")
-      .withIndex("by_room_status", (q) =>
-        q.eq("roomId", roomId).eq("status", status),
-      )
-      .collect();
-    for (const r of requests) await ctx.db.delete(r._id);
-  }
-
-  await ctx.db.delete(roomId);
-  if (room) {
-    logEvent("room_cleaned", {
-      roomCode: room.code,
-      status: room.status,
-    });
-  }
-}

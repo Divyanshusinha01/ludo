@@ -105,6 +105,7 @@ export function toOfflineBundle(state: OfflineGameState): OfflineBundle {
       rankings: state.rankings,
       lastEvent: state.lastEvent,
       events: state.events,
+      eventSeq: 0,
       createdAt: state.createdAt,
       finishedAt: state.finishedAt,
       vsComputer: false,

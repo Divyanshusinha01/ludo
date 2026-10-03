@@ -1,6 +1,8 @@
 import { MutationCtx, QueryCtx } from "../_generated/server";
 import { Doc, Id } from "../_generated/dataModel";
 import { GameError, fail } from "./errors";
+import { logEvent } from "./log";
+import { deleteEventsForRoom } from "./gameStore";
 import type { Color } from "./ludo";
 
 type DbCtx = QueryCtx | MutationCtx;
@@ -78,5 +80,45 @@ export async function clearVoiceForRoom(
     .collect();
   for (const s of signals) {
     await ctx.db.delete(s._id);
+  }
+}
+
+/** Delete room graph including append-only game events. */
+export async function deleteRoomCascade(
+  ctx: MutationCtx,
+  roomId: Id<"rooms">,
+): Promise<void> {
+  const room = await ctx.db.get(roomId);
+  await deleteEventsForRoom(ctx, roomId);
+  await clearChatForRoom(ctx, roomId);
+  await clearVoiceForRoom(ctx, roomId);
+  const players = await ctx.db
+    .query("players")
+    .withIndex("by_room", (q) => q.eq("roomId", roomId))
+    .collect();
+  for (const p of players) await ctx.db.delete(p._id);
+
+  const tokens = await ctx.db
+    .query("tokens")
+    .withIndex("by_room", (q) => q.eq("roomId", roomId))
+    .collect();
+  for (const t of tokens) await ctx.db.delete(t._id);
+
+  for (const status of ["pending", "approved", "denied"] as const) {
+    const requests = await ctx.db
+      .query("rejoinRequests")
+      .withIndex("by_room_status", (q) =>
+        q.eq("roomId", roomId).eq("status", status),
+      )
+      .collect();
+    for (const r of requests) await ctx.db.delete(r._id);
+  }
+
+  await ctx.db.delete(roomId);
+  if (room) {
+    logEvent("room_cleaned", {
+      roomCode: room.code,
+      status: room.status,
+    });
   }
 }

@@ -1,12 +1,9 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { ludoEventValidator } from "./lib/game/eventValidators";
 
-export const colorValidator = v.union(
-  v.literal("red"),
-  v.literal("green"),
-  v.literal("yellow"),
-  v.literal("blue"),
-);
+export { colorValidator } from "./lib/colors";
+import { colorValidator } from "./lib/colors";
 
 export const tokenValidator = v.object({
   index: v.number(),
@@ -86,6 +83,9 @@ export default defineSchema({
     winningTeam: v.optional(
       v.union(v.literal("A"), v.literal("B"), v.null()),
     ),
+    /** Monotonic event log head (undefined on legacy rooms). */
+    eventSeq: v.optional(v.number()),
+    rulesVersion: v.optional(v.number()),
   })
     .index("by_code", ["code"])
     .index("by_host", ["hostClientId"])
@@ -180,6 +180,11 @@ export default defineSchema({
     .index("by_room_color", ["roomId", "color"]),
 
   /** WebRTC signaling (SDP offer/answer + ICE). Routed by seat color. */
+  gameEvents: defineTable(ludoEventValidator).index("by_game_seq", [
+    "gameId",
+    "seq",
+  ]),
+
   voiceSignals: defineTable({
     roomId: v.id("rooms"),
     fromColor: colorValidator,

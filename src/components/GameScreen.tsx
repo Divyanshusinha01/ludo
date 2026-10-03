@@ -433,6 +433,7 @@ export function GameScreen({ data, roomId, clientId }: Props) {
         roomId,
         clientId,
         turnId: room.turnId,
+        expectedSeq: room.eventSeq,
       });
       // Keep a short spin even on fast networks; never stack extra delay
       // after a slow round-trip (joiners feel this hardest).
@@ -505,6 +506,7 @@ export function GameScreen({ data, roomId, clientId }: Props) {
         clientId,
         turnId: room.turnId,
         targetColor: color,
+        expectedSeq: room.eventSeq,
       });
       setLocalDice(null);
     } catch (e) {
@@ -536,6 +538,7 @@ export function GameScreen({ data, roomId, clientId }: Props) {
         tokenIndex,
         ...(tokenColor !== me.color ? { tokenColor } : {}),
         turnId: room.turnId,
+        expectedSeq: room.eventSeq,
       });
       if (result.captured) {
         haptic("capture");

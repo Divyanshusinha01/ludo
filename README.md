@@ -16,6 +16,14 @@
 3. In another terminal: `npm run dev`
 4. Open [http://localhost:3000](http://localhost:3000)
 
+## Event log and replay (dev)
+
+Gameplay mutations append to the `gameEvents` table and require `expectedSeq` from the client (`room.eventSeq`). Legacy rooms without `eventSeq` are rejected — run `npx convex run legacy:purgeLegacyRooms` once after deploying the schema.
+
+Turn expiry: if a command arrives after the turn clock, the server commits timeout events first and returns `turnExpired` on roll (no thrown mutation, so the timeout persists).
+
+Debug replay UI: `/debug/replay/[CODE]` in development, or set `NEXT_PUBLIC_ENABLE_REPLAY_DEBUG=1` in production.
+
 ## Scripts
 
 - `npm run dev` — Next.js frontend

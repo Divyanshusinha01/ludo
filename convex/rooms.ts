@@ -38,8 +38,18 @@ import {
   clearChatForRoom,
   clearVoiceForColor,
   clearVoiceForRoom,
+  deleteRoomCascade,
   requirePlayer,
 } from "./lib/roomAuth";
+import {
+  commitEventsBootstrap,
+  commitEvents,
+  assertEventSourcedRoom,
+} from "./lib/gameStore";
+import {
+  CURRENT_RULES_VERSION,
+  type LudoEventDraft,
+} from "./lib/game/eventValidators";
 
 async function uniqueCode(ctx: MutationCtx): Promise<string> {
   for (let i = 0; i < 20; i++) {
@@ -85,6 +95,7 @@ function publicRoom(room: Doc<"rooms">) {
     rankings: room.rankings ?? [],
     lastEvent: room.lastEvent,
     events: room.events ?? [],
+    eventSeq: room.eventSeq ?? 0,
     createdAt: room.createdAt,
     finishedAt: room.finishedAt ?? null,
     vsComputer: !!room.vsComputer,
@@ -166,6 +177,45 @@ function seatedFromPlayers(players: Doc<"players">[]): Color[] {
   return COLORS.filter((c) => players.some((p) => p.color === c)) as Color[];
 }
 
+function buildMatchStartDrafts(
+  room: Doc<"rooms">,
+  players: Doc<"players">[],
+  now: number,
+): LudoEventDraft[] {
+  const mode = room.mode === "2v2" ? "2v2" : "1v1";
+  const seats = players.map((p) => ({
+    color: p.color as Color,
+    name: p.name,
+    isBot: !!p.isBot,
+    team: p.team,
+    lives: MAX_TIMEOUT_LIVES,
+    eliminated: false,
+    finishRank: null as number | null,
+  }));
+  const activeColors = seatedFromPlayers(players);
+  const first = activeColors[0] ?? ("red" as Color);
+  return [
+    {
+      gameId: room._id,
+      createdAt: now,
+      actor: { kind: "system" },
+      eventType: "GAME_STARTED",
+      payload: {
+        rulesVersion: room.rulesVersion ?? CURRENT_RULES_VERSION,
+        mode,
+        seats,
+      },
+    },
+    {
+      gameId: room._id,
+      createdAt: now,
+      actor: { kind: "system" },
+      eventType: "TURN_STARTED",
+      payload: { seat: first },
+    },
+  ];
+}
+
 /** Next host among humans only — bots must never become host. */
 function pickNextHumanHost(
   players: Doc<"players">[],
@@ -180,46 +230,6 @@ function playableHumans(players: Doc<"players">[]): Doc<"players">[] {
   return players.filter(
     (p) => !p.isBot && !p.eliminated && p.finishRank == null,
   );
-}
-
-async function deleteRoomCascade(
-  ctx: MutationCtx,
-  roomId: Id<"rooms">,
-) {
-  await clearChatForRoom(ctx, roomId);
-  await clearVoiceForRoom(ctx, roomId);
-  const players = await ctx.db
-    .query("players")
-    .withIndex("by_room", (q) => q.eq("roomId", roomId))
-    .collect();
-  for (const p of players) await ctx.db.delete(p._id);
-  const tokens = await ctx.db
-    .query("tokens")
-    .withIndex("by_room", (q) => q.eq("roomId", roomId))
-    .collect();
-  for (const t of tokens) await ctx.db.delete(t._id);
-  const rejoinPending = await ctx.db
-    .query("rejoinRequests")
-    .withIndex("by_room_status", (q) =>
-      q.eq("roomId", roomId).eq("status", "pending"),
-    )
-    .collect();
-  for (const r of rejoinPending) await ctx.db.delete(r._id);
-  const rejoinApproved = await ctx.db
-    .query("rejoinRequests")
-    .withIndex("by_room_status", (q) =>
-      q.eq("roomId", roomId).eq("status", "approved"),
-    )
-    .collect();
-  for (const r of rejoinApproved) await ctx.db.delete(r._id);
-  const rejoinDenied = await ctx.db
-    .query("rejoinRequests")
-    .withIndex("by_room_status", (q) =>
-      q.eq("roomId", roomId).eq("status", "denied"),
-    )
-    .collect();
-  for (const r of rejoinDenied) await ctx.db.delete(r._id);
-  await ctx.db.delete(roomId);
 }
 
 async function resetBoard(
@@ -399,6 +409,8 @@ export const createRoom = mutation({
       createdAt: now,
       lastActivityAt: now,
       seatedColors: [color],
+      eventSeq: 0,
+      rulesVersion: CURRENT_RULES_VERSION,
     });
 
     await ctx.db.insert("players", {
@@ -412,6 +424,38 @@ export const createRoom = mutation({
       lives: MAX_TIMEOUT_LIVES,
       eliminated: false,
       ...(gameMode === "2v2" ? { team: "A" as const } : {}),
+    });
+
+    const hostSeat = {
+      color,
+      name,
+      isBot: false,
+      ...(gameMode === "2v2" ? { team: "A" as const } : {}),
+    };
+    const bootstrap: LudoEventDraft[] = [
+      {
+        gameId: roomId,
+        createdAt: now,
+        actor: { kind: "system" },
+        eventType: "GAME_CREATED",
+        payload: {
+          mode: gameMode,
+          vsComputer: false,
+          rulesVersion: CURRENT_RULES_VERSION,
+          host: hostSeat,
+        },
+      },
+      {
+        gameId: roomId,
+        createdAt: now,
+        actor: { kind: "seat", color },
+        eventType: "PLAYER_JOINED",
+        payload: { seat: hostSeat },
+      },
+    ];
+    await commitEventsBootstrap(ctx, roomId, bootstrap, {
+      now,
+      actorClientId: clientId,
     });
 
     logEvent("room_created", { roomCode: code, clientId });
@@ -489,6 +533,8 @@ export const createVsComputer = mutation({
       lastActivityAt: now,
       seatedColors: [hostColor],
       vsComputer: true,
+      eventSeq: 0,
+      rulesVersion: CURRENT_RULES_VERSION,
     });
 
     await ctx.db.insert("players", {
@@ -527,14 +573,48 @@ export const createVsComputer = mutation({
     }
     await Promise.all(botInserts);
 
-    await resetBoard(
-      ctx,
-      roomId,
-      seated,
-      `Game started — ${name} rolls first`,
+    const allPlayers = await ctx.db
+      .query("players")
+      .withIndex("by_room", (q) => q.eq("roomId", roomId))
+      .collect();
+    const roomDoc = (await ctx.db.get(roomId))!;
+    const vsDrafts: LudoEventDraft[] = [
+      {
+        gameId: roomId,
+        createdAt: now,
+        actor: { kind: "system" },
+        eventType: "GAME_CREATED",
+        payload: {
+          mode: "1v1",
+          vsComputer: true,
+          rulesVersion: CURRENT_RULES_VERSION,
+          host: {
+            color: hostColor,
+            name,
+            isBot: false,
+          },
+        },
+      },
+      ...allPlayers.map((p) => ({
+        gameId: roomId,
+        createdAt: now,
+        actor: { kind: "seat" as const, color: p.color as Color },
+        eventType: "PLAYER_JOINED" as const,
+        payload: {
+          seat: {
+            color: p.color as Color,
+            name: p.name,
+            isBot: !!p.isBot,
+          },
+        },
+      })),
+      ...buildMatchStartDrafts(roomDoc, allPlayers, now),
+    ];
+    await commitEventsBootstrap(ctx, roomId, vsDrafts, {
       now,
-    );
-    await ctx.db.patch(roomId, { seatedColors: seated });
+      actorClientId: clientId,
+    });
+    await ctx.db.patch(roomId, { seatedColors: seated, status: "playing" });
 
     logEvent("vs_computer_created", {
       roomCode: code,
@@ -1479,13 +1559,12 @@ export const startGame = mutation({
 
     const activeColors = seatedFromPlayers(players);
     const now = Date.now();
-    const first = players.find((p) => p.color === activeColors[0]);
-    await resetBoard(
+    assertEventSourcedRoom(room);
+    await commitEvents(
       ctx,
-      args.roomId,
-      activeColors,
-      `Game started — ${first?.name ?? activeColors[0]} rolls first`,
-      now,
+      room,
+      buildMatchStartDrafts(room, players, now),
+      { now, actorClientId: clientId },
     );
     await ctx.db.patch(args.roomId, { seatedColors: activeColors });
     logEvent("game_started", {
@@ -1552,13 +1631,12 @@ export const rematch = mutation({
     }
 
     const activeColors = seatedFromPlayers(remaining);
-    const first = remaining.find((p) => p.color === activeColors[0]);
-    await resetBoard(
+    assertEventSourcedRoom(room);
+    await commitEvents(
       ctx,
-      args.roomId,
-      activeColors,
-      `Rematch — ${first?.name ?? activeColors[0]} rolls first`,
-      now,
+      room,
+      buildMatchStartDrafts(room, remaining, now),
+      { now, actorClientId: clientId },
     );
     await clearChatForRoom(ctx, args.roomId);
     await clearVoiceForRoom(ctx, args.roomId);
@@ -1605,6 +1683,7 @@ const roomBundleValidator = v.union(
       mode: v.union(v.literal("1v1"), v.literal("2v2")),
       winningTeam: v.union(v.literal("A"), v.literal("B"), v.null()),
       passedRollTo: v.union(colorValidator, v.null()),
+      eventSeq: v.number(),
     }),
     players: v.array(
       v.object({

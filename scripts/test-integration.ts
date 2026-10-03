@@ -205,6 +205,7 @@ async function main() {
   });
   assert(started, "4p room");
   const turnId = started!.room.turnId;
+  let eventSeq = started!.room.eventSeq;
   assert(typeof turnId === "number" && Number.isFinite(turnId), "turnId present");
   assert(started!.room.currentTurn === "red", "red starts");
 
@@ -215,6 +216,7 @@ async function main() {
         roomId: roomId4,
         clientId: p2b,
         turnId,
+        expectedSeq: eventSeq,
       }),
     "turn",
   );
@@ -225,6 +227,7 @@ async function main() {
       roomId: roomId4,
       clientId: h4,
       turnId: turnId - 1,
+      expectedSeq: eventSeq,
     }),
   );
   mark("stale/replayed roll rejected");
@@ -235,6 +238,7 @@ async function main() {
       clientId: h4,
       tokenIndex: 0,
       turnId,
+      expectedSeq: eventSeq,
     }),
   );
   mark("cannot move without rolling");
@@ -245,11 +249,13 @@ async function main() {
       roomId: roomId4,
       clientId: h4,
       turnId,
+      expectedSeq: eventSeq,
     }),
     client.mutation(api.game.rollDice, {
       roomId: roomId4,
       clientId: h4,
       turnId,
+      expectedSeq: eventSeq,
     }),
   ]);
   const rollWins = concurrent.filter((r) => r.status === "fulfilled");
@@ -276,12 +282,14 @@ async function main() {
     assert(afterRoll!.room.diceRolled === true, "pending move keeps diceRolled");
   }
   mark("dice authored server-side (client cannot set face)");
+  eventSeq = afterRoll!.room.eventSeq;
 
   await expectReject("double roll", () =>
     client.mutation(api.game.rollDice, {
       roomId: roomId4,
       clientId: h4,
       turnId,
+      expectedSeq: eventSeq,
     }),
   );
   mark("cannot roll twice");
@@ -293,6 +301,7 @@ async function main() {
       clientId: p2b,
       tokenIndex: 0,
       turnId,
+      expectedSeq: eventSeq,
     }),
   );
   mark("cannot move on another's turn");
@@ -303,6 +312,7 @@ async function main() {
       clientId: h4,
       tokenIndex: 99,
       turnId,
+      expectedSeq: eventSeq,
     }),
   );
   mark("invalid token index rejected");
@@ -313,6 +323,7 @@ async function main() {
       clientId: h4,
       tokenIndex: -1,
       turnId,
+      expectedSeq: eventSeq,
     }),
   );
   mark("negative token index rejected");
@@ -326,12 +337,14 @@ async function main() {
         clientId: h4,
         tokenIndex: idx,
         turnId,
+        expectedSeq: eventSeq,
       }),
       client.mutation(api.game.moveToken, {
         roomId: roomId4,
         clientId: h4,
         tokenIndex: idx,
         turnId,
+        expectedSeq: eventSeq,
       }),
     ]);
     const moveWins = moves.filter((r) => r.status === "fulfilled");
@@ -395,6 +408,7 @@ async function main() {
       roomId: "k57xxxxxxxxxxxxxxxxxxxxxxxxxxxxx" as Id<"rooms">,
       clientId: h4,
       turnId: 1,
+      expectedSeq: 0,
     });
   });
   mark("invalid room id rejected safely");
@@ -507,6 +521,7 @@ async function main() {
       roomId: roomId4,
       clientId: sid(),
       turnId: state!.room.turnId,
+      expectedSeq: state!.room.eventSeq,
     }),
   );
   mark("outsider cannot roll");

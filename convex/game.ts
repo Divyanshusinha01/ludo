@@ -54,6 +54,13 @@ import {
   assertActionInterval,
   assertValidClientId,
 } from "./lib/session";
+import { decide } from "./lib/game/decide";
+import {
+  assertEventSourcedRoom,
+  commitEvents,
+  loadGameState,
+} from "./lib/gameStore";
+import { summarizeMove, summarizeRoll } from "./lib/gameSummaries";
 
 async function loadTokens(
   ctx: MutationCtx | QueryCtx,
@@ -497,15 +504,37 @@ async function applyTurnTimeout(
  * Server-authoritative turn clock. If expired, apply timeout and reject the action.
  * Prevents acting in the window after expiry but before the scheduled job runs.
  */
+async function commitTurnExpiryIfNeeded(
+  ctx: MutationCtx,
+  room: Doc<"rooms">,
+): Promise<boolean> {
+  const started = room.turnStartedAt;
+  if (started === undefined) return false;
+  if (Date.now() <= started + TURN_TIMEOUT_MS) return false;
+  assertEventSourcedRoom(room);
+  const state = await loadGameState(ctx, room);
+  const now = Date.now();
+  const result = decide(
+    state,
+    { type: "ExpireTurn" },
+    { gameId: room._id, createdAt: now },
+  );
+  if (!result.ok) return false;
+  await commitEvents(ctx, room, result.events, {
+    expectedSeq: room.eventSeq,
+    now,
+    actorClientId: undefined,
+  });
+  return true;
+}
+
 async function assertTurnNotExpired(
   ctx: MutationCtx,
   room: Doc<"rooms">,
 ): Promise<void> {
-  const started = room.turnStartedAt;
-  if (started === undefined) return;
-  if (Date.now() <= started + TURN_TIMEOUT_MS) return;
-  await applyTurnTimeout(ctx, room);
-  fail(GameError.turnExpired);
+  if (await commitTurnExpiryIfNeeded(ctx, room)) {
+    fail(GameError.turnExpired);
+  }
 }
 
 function assertFreshTurn(room: Doc<"rooms">, expectedTurnId: number) {
@@ -1131,6 +1160,7 @@ const rollResultValidator = v.object({
   rollAgain: v.optional(v.boolean()),
   autoMoved: v.optional(v.boolean()),
   autoMove: v.optional(moveResultValidator),
+  turnExpired: v.optional(v.literal(true)),
 });
 
 export const rollDice = mutation({
@@ -1139,6 +1169,7 @@ export const rollDice = mutation({
     clientId: v.string(),
     /** Client's view of turnId — rejects stale tabs. */
     turnId: v.number(),
+    expectedSeq: v.number(),
   },
   returns: rollResultValidator,
   handler: async (ctx, args) => {
@@ -1146,6 +1177,7 @@ export const rollDice = mutation({
     const room = await ctx.db.get(args.roomId);
     if (!room) fail(GameError.roomNotFound);
     if (room.status !== "playing") fail(GameError.gameNotPlaying);
+    assertEventSourcedRoom(room);
 
     assertFreshTurn(room, args.turnId);
 
@@ -1153,9 +1185,15 @@ export const rollDice = mutation({
 
     const player = await requireRollPlayer(ctx, args.roomId, clientId, room);
     if (player.isBot) fail(GameError.notYourTurn);
-    await assertTurnNotExpired(ctx, room);
+    if (await commitTurnExpiryIfNeeded(ctx, room)) {
+      return {
+        value: 0,
+        skipped: true,
+        legalMoves: [],
+        turnExpired: true as const,
+      };
+    }
 
-    // Re-read after possible timeout (assertTurnNotExpired throws if expired).
     const fresh = (await ctx.db.get(args.roomId))!;
     if (fresh.diceRolled) fail(GameError.diceAlreadyRolled);
     if ((fresh.passedRollTo ?? null) != null) {
@@ -1165,7 +1203,23 @@ export const rollDice = mutation({
     const now = assertActionInterval(player.lastActionAt, ACTION_MIN_INTERVAL_MS);
     await ctx.db.patch(player._id, { lastActionAt: now });
 
-    return await executeRoll(ctx, args.roomId, fresh, player, now, clientId);
+    const before = await loadGameState(ctx, fresh);
+    const value = rollFairDice(
+      allTokensInYard(before.tokens, player.color as Color),
+    );
+    const decision = decide(
+      before,
+      { type: "RollDice", color: player.color as Color, value },
+      { gameId: fresh._id, createdAt: now },
+    );
+    if (!decision.ok) fail(GameError.illegalMove);
+
+    const committed = await commitEvents(ctx, fresh, decision.events, {
+      expectedSeq: args.expectedSeq,
+      now,
+      actorClientId: clientId,
+    });
+    return summarizeRoll(before, committed.events, committed.state);
   },
 });
 
@@ -1178,6 +1232,7 @@ export const moveToken = mutation({
     tokenColor: v.optional(colorValidator),
     /** Client's view of turnId — rejects stale tabs. */
     turnId: v.number(),
+    expectedSeq: v.number(),
   },
   returns: moveResultValidator,
   handler: async (ctx, args) => {
@@ -1185,28 +1240,40 @@ export const moveToken = mutation({
     const room = await ctx.db.get(args.roomId);
     if (!room) fail(GameError.roomNotFound);
     if (room.status !== "playing") fail(GameError.gameNotPlaying);
+    assertEventSourcedRoom(room);
 
     assertFreshTurn(room, args.turnId);
 
     const player = await requireMovePlayer(ctx, args.roomId, clientId, room);
     if (player.isBot) fail(GameError.notYourTurn);
-    await assertTurnNotExpired(ctx, room);
+    if (await commitTurnExpiryIfNeeded(ctx, room)) {
+      fail(GameError.turnExpired);
+    }
 
     const fresh = (await ctx.db.get(args.roomId))!;
     const now = assertActionInterval(player.lastActionAt, ACTION_MIN_INTERVAL_MS);
     await ctx.db.patch(player._id, { lastActionAt: now });
 
+    const before = await loadGameState(ctx, fresh);
     const moverColor = (args.tokenColor ?? player.color) as Color;
-    return await executeMove(
-      ctx,
-      args.roomId,
-      fresh,
-      player,
-      moverColor,
-      args.tokenIndex,
-      now,
-      clientId,
+    const decision = decide(
+      before,
+      {
+        type: "MoveToken",
+        actorColor: player.color as Color,
+        tokenColor: moverColor,
+        tokenIndex: args.tokenIndex,
+      },
+      { gameId: fresh._id, createdAt: now },
     );
+    if (!decision.ok) fail(GameError.illegalMove);
+
+    const committed = await commitEvents(ctx, fresh, decision.events, {
+      expectedSeq: args.expectedSeq,
+      now,
+      actorClientId: clientId,
+    });
+    return summarizeMove(before, committed.events, committed.state);
   },
 });
 
@@ -1276,6 +1343,7 @@ export const passTurn = mutation({
     clientId: v.string(),
     turnId: v.number(),
     targetColor: colorValidator,
+    expectedSeq: v.number(),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -1283,6 +1351,7 @@ export const passTurn = mutation({
     const room = await ctx.db.get(args.roomId);
     if (!room) fail(GameError.roomNotFound);
     if (room.status !== "playing") fail(GameError.gameNotPlaying);
+    assertEventSourcedRoom(room);
 
     if (modeFromRoom(room) !== "2v2") fail(GameError.passNotAllowed);
 
@@ -1290,7 +1359,9 @@ export const passTurn = mutation({
 
     const player = await requirePlayerInRoom(ctx, args.roomId, clientId);
     if (player.isBot) fail(GameError.notYourTurn);
-    await assertTurnNotExpired(ctx, room);
+    if (await commitTurnExpiryIfNeeded(ctx, room)) {
+      fail(GameError.turnExpired);
+    }
 
     const fresh = (await ctx.db.get(args.roomId))!;
     if (fresh.currentTurn !== player.color) fail(GameError.notYourTurn);
@@ -1304,8 +1375,18 @@ export const passTurn = mutation({
     const now = assertActionInterval(player.lastActionAt, ACTION_MIN_INTERVAL_MS);
     await ctx.db.patch(player._id, { lastActionAt: now });
 
-    const passed = await passRollToTeammateIfLegal(ctx, fresh, player, now);
-    if (!passed) fail(GameError.passNothingToPass);
+    const state = await loadGameState(ctx, fresh);
+    const decision = decide(
+      state,
+      { type: "PassRoll", from: player.color as Color, to: teammateColor },
+      { gameId: fresh._id, createdAt: now },
+    );
+    if (!decision.ok) fail(GameError.passNothingToPass);
+    await commitEvents(ctx, fresh, decision.events, {
+      expectedSeq: args.expectedSeq,
+      now,
+      actorClientId: clientId,
+    });
     return null;
   },
 });
@@ -1315,18 +1396,36 @@ export const handleTurnTimeout = internalMutation({
   args: {
     roomId: v.id("rooms"),
     turnId: v.number(),
+    expectedSeq: v.optional(v.number()),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
     const room = await ctx.db.get(args.roomId);
     if (!room || room.status !== "playing") return null;
     if ((room.turnId ?? 0) !== args.turnId) return null;
+    if (room.eventSeq === undefined) return null;
+    if (
+      args.expectedSeq !== undefined &&
+      room.eventSeq !== args.expectedSeq
+    ) {
+      return null;
+    }
 
-    // Idempotent: only fire if the clock has actually elapsed.
     const started = room.turnStartedAt ?? 0;
     if (Date.now() < started + TURN_TIMEOUT_MS - 50) return null;
 
-    await applyTurnTimeout(ctx, room);
+    const state = await loadGameState(ctx, room);
+    const now = Date.now();
+    const result = decide(
+      state,
+      { type: "ExpireTurn" },
+      { gameId: room._id, createdAt: now },
+    );
+    if (!result.ok) return null;
+    await commitEvents(ctx, room, result.events, {
+      expectedSeq: room.eventSeq,
+      now,
+    });
     return null;
   },
 });
