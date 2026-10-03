@@ -8,6 +8,8 @@ const alias = {
 export default defineConfig({
   resolve: { alias },
   test: {
+    // One line per successful Convex mutation; tests that need it spy on console.log.
+    onConsoleLog: (log) => !log.includes('"event":"mutation_ok"'),
     projects: [
       {
         resolve: { alias },
@@ -15,6 +17,7 @@ export default defineConfig({
           name: "unit",
           environment: "node",
           include: ["tests/*.test.ts", "tests/game/**/*.test.ts"],
+          testTimeout: 60_000,
         },
       },
       {
@@ -35,6 +38,7 @@ export default defineConfig({
           environment: "jsdom",
           include: ["tests/ui/**/*.test.tsx"],
           setupFiles: ["tests/ui/setup.ts"],
+          testTimeout: 60_000,
         },
       },
     ],

@@ -10,6 +10,7 @@ import {
 import { BOT_THINK_MS } from "./bot";
 import { GameError, fail } from "./errors";
 import { withEvents } from "./events";
+import { logEvent } from "./log";
 import {
   decide,
   describeEvent,
@@ -28,6 +29,32 @@ export function assertEventSourcedRoom(room: Doc<"rooms">): void {
   if (room.eventSeq === undefined) {
     fail(GameError.legacyRoom);
   }
+}
+
+export type StaleReason = "seq_mismatch" | "tail_mismatch" | "turn_mismatch";
+
+/**
+ * Reject a call made against an outdated room version. The log line survives
+ * the mutation's rollback, so it is the server-side record of the rejection.
+ */
+export function rejectStale(
+  room: Doc<"rooms">,
+  reason: StaleReason,
+  fields: {
+    headSeq: number | undefined;
+    expectedSeq?: number;
+    tailSeq?: number | null;
+    turnId?: number;
+    expectedTurnId?: number;
+  },
+): never {
+  logEvent("mutation_rejected", {
+    code: "stale",
+    reason,
+    roomCode: room.code,
+    ...fields,
+  });
+  fail(GameError.staleAction);
 }
 
 export async function loadGameState(
@@ -122,17 +149,17 @@ export async function deleteEventsForRoom(
 
 async function assertTailMatchesHead(
   ctx: MutationCtx,
-  roomId: Id<"rooms">,
+  room: Doc<"rooms">,
   head: number,
 ): Promise<void> {
   if (head === 0) return;
   const tail = await ctx.db
     .query("gameEvents")
-    .withIndex("by_game_seq", (q) => q.eq("gameId", roomId))
+    .withIndex("by_game_seq", (q) => q.eq("gameId", room._id))
     .order("desc")
     .first();
   if (!tail || tail.seq !== head) {
-    fail(GameError.staleAction);
+    rejectStale(room, "tail_mismatch", { headSeq: head, tailSeq: tail?.seq ?? null });
   }
 }
 
@@ -254,6 +281,11 @@ function restartsTurnClock(before: GameState, after: GameState): boolean {
   );
 }
 
+/**
+ * `rooms.eventSeq` is the room's state version: every successful commit moves
+ * it strictly forward by the number of events appended, and nothing else
+ * writes it after bootstrap.
+ */
 export async function commitEvents(
   ctx: MutationCtx,
   room: Doc<"rooms">,
@@ -261,14 +293,17 @@ export async function commitEvents(
   opts: CommitOptions,
 ): Promise<CommitResult> {
   assertEventSourcedRoom(room);
+  if (drafts.length === 0) {
+    throw new Error("commitEvents: refusing an empty commit");
+  }
   const freshRoom = await ctx.db.get(room._id);
   if (!freshRoom) fail(GameError.roomNotFound);
 
   const head = freshRoom.eventSeq ?? 0;
   if (opts.expectedSeq !== undefined && opts.expectedSeq !== head) {
-    fail(GameError.staleAction);
+    rejectStale(freshRoom, "seq_mismatch", { headSeq: head, expectedSeq: opts.expectedSeq });
   }
-  await assertTailMatchesHead(ctx, room._id, head);
+  await assertTailMatchesHead(ctx, freshRoom, head);
 
   const before = await loadGameState(ctx, freshRoom);
   let state = before;
@@ -303,6 +338,9 @@ export async function commitEvents(
   }
 
   const newHead = head + drafts.length;
+  if (newHead <= head) {
+    throw new Error(`commitEvents: head must advance (head ${head}, new ${newHead})`);
+  }
   const clockRestart = restartsTurnClock(before, state);
   const turnStartedAt = clockRestart ? opts.now : (freshRoom.turnStartedAt ?? opts.now);
   await ctx.db.patch(room._id, { eventSeq: newHead });

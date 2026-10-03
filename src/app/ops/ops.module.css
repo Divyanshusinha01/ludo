@@ -1,0 +1,83 @@
+.layout {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.gate {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 360px;
+  margin: 2rem auto;
+}
+
+.gate input {
+  padding: 0.5rem;
+  border: 1px solid #333;
+  border-radius: 6px;
+  font: inherit;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 0.75rem;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.75rem;
+  border: 1px solid #333;
+  border-radius: 8px;
+}
+
+.cardLabel {
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+
+.cardValue {
+  font-size: 1.4rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid #333;
+}
+
+.empty {
+  padding: 1rem;
+  border: 1px dashed #333;
+  border-radius: 8px;
+}
+
+.muted {
+  opacity: 0.7;
+}
+
+.error {
+  color: #c0392b;
+}

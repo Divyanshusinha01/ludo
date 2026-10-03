@@ -1,6 +1,12 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { ludoEventValidator } from "./lib/game/eventValidators";
+import {
+  metricKindValidator,
+  metricOutcomeValidator,
+  metricSourceValidator,
+  opsSampleFields,
+} from "./lib/metrics";
 
 export { colorValidator } from "./lib/colors";
 import { colorValidator } from "./lib/colors";
@@ -115,6 +121,8 @@ export default defineSchema({
     lastChatAt: v.optional(v.number()),
     /** Last troubleshoot report — separate from gameplay rate-limiting. */
     lastTroubleAt: v.optional(v.number()),
+    /** Last client metrics batch — rate-limits ops.reportClientEvents. */
+    lastMetricsAt: v.optional(v.number()),
     /** Server-driven seat; never accepts client heartbeats as authority. */
     isBot: v.optional(v.boolean()),
     /** Manual team pick in 2v2 lobby (host is always Team A). */
@@ -200,4 +208,37 @@ export default defineSchema({
   })
     .index("by_room_to", ["roomId", "toColor"])
     .index("by_room", ["roomId"]),
+
+  /**
+   * Raw metric samples, insert-only. Successful server mutations and batched
+   * client reports land here; ops.rollup folds complete minutes into
+   * opsMinute and deletes the raw rows.
+   */
+  opsSamples: defineTable(opsSampleFields).index("by_at", ["at"]),
+
+  /** Per-minute aggregates; `hist` counts latencies per LATENCY_BUCKETS_MS bucket. */
+  opsMinute: defineTable({
+    minute: v.number(),
+    kind: metricKindValidator,
+    outcome: metricOutcomeValidator,
+    source: metricSourceValidator,
+    count: v.number(),
+    hist: v.array(v.number()),
+  }).index("by_minute", ["minute", "kind", "outcome", "source"]),
+
+  /** Point-in-time gauges captured by each rollup run. */
+  opsGauges: defineTable({
+    minute: v.number(),
+    activeRooms: v.number(),
+    activePlayers: v.number(),
+    connectedPlayers: v.number(),
+  }).index("by_minute", ["minute"]),
+
+  /** Most recent client-reported rejections and errors (capped by the rollup). */
+  opsErrors: defineTable({
+    at: v.number(),
+    kind: metricKindValidator,
+    code: v.string(),
+    message: v.string(),
+  }).index("by_at", ["at"]),
 });

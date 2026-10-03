@@ -18,6 +18,10 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p convex",
     "test:integration": "npx tsx scripts/test-integration.ts",
     "test:full-game": "npx tsx scripts/test-full-game.ts",
+    "load:results-dir": "node -e \"require('fs').mkdirSync('load/results',{recursive:true})\"",
+    "load:gameplay": "npm run load:results-dir && k6 run load/k6/gameplay.js",
+    "load:reconnect": "npm run load:results-dir && k6 run load/k6/reconnect.js",
+    "load:verify": "node load/verify-replay.mjs",
     "prepare:board": "node scripts/prepare-board-art.mjs --debug-grid"
   },
   "dependencies": {
