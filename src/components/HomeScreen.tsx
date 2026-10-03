@@ -17,15 +17,64 @@ const TRACK_TOKENS = [
   { cell: 11, color: "blue", delay: 360 },
 ] as const;
 
+type Mode = "home" | HomeOnlineMode;
+
+/** Key on history.state marking which home sub-screen an entry belongs to. */
+const HISTORY_KEY = "ludoHomeMode";
+
+const PARENT: Record<HomeOnlineMode, Mode> = {
+  online: "home",
+  multiplayer: "home",
+  create: "online",
+  join: "online",
+};
+
+function historyMode(state: unknown): Mode {
+  const value = (state as Record<string, unknown> | null)?.[HISTORY_KEY];
+  return typeof value === "string" && (value === "home" || value in PARENT)
+    ? (value as Mode)
+    : "home";
+}
+
+function replaceHistoryMode(next: Mode) {
+  window.history.replaceState({ ...window.history.state, [HISTORY_KEY]: next }, "");
+}
+
 export function HomeScreen() {
   const router = useRouter();
-  const [mode, setMode] = useState<"home" | HomeOnlineMode>("home");
+  const [mode, setMode] = useState<Mode>("home");
   const [offline, setOffline] = useState(false);
   const [openingOffline, startOfflineNav] = useTransition();
 
   useEffect(() => {
     bindAudioUnlock();
   }, []);
+
+  // Each sub-screen gets its own history entry so the phone/browser back
+  // button steps back through the menu instead of leaving the site.
+  useEffect(() => {
+    const restored = historyMode(window.history.state);
+    if (restored !== "home") void Promise.resolve().then(() => setMode(restored));
+    const onPopState = (e: PopStateEvent) => setMode(historyMode(e.state));
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  function changeMode(next: Mode) {
+    if (next === mode) return;
+    const goingBack = mode !== "home" && PARENT[mode] === next;
+    if (goingBack && historyMode(window.history.state) === mode) {
+      // Popping keeps the stack in sync; the popstate listener sets the mode.
+      window.history.back();
+      return;
+    }
+    if (goingBack || next === "home") {
+      replaceHistoryMode(next);
+    } else {
+      window.history.pushState({ [HISTORY_KEY]: next }, "");
+    }
+    setMode(next);
+  }
 
   useEffect(() => {
     const sync = () => setOffline(!navigator.onLine);
@@ -40,6 +89,7 @@ export function HomeScreen() {
 
   useEffect(() => {
     if (offline && mode !== "home") {
+      replaceHistoryMode("home");
       setMode("home");
     }
   }, [offline, mode]);
@@ -102,14 +152,14 @@ export function HomeScreen() {
               name="Private Room"
               desc={offline ? "Needs internet" : "Share a code with 2–4 friends"}
               disabled={offline}
-              onClick={() => setMode("online")}
+              onClick={() => changeMode("online")}
             />
             <ModeRow
               color="blue"
               name="Play Multiplayer"
               desc={offline ? "Needs internet" : "Get matched with players worldwide"}
               disabled={offline}
-              onClick={() => setMode("multiplayer")}
+              onClick={() => changeMode("multiplayer")}
             />
             <ModeRow
               color="green"
@@ -131,7 +181,7 @@ export function HomeScreen() {
           key="online"
           mode={mode}
           offline={offline}
-          onModeChange={setMode}
+          onModeChange={changeMode}
         />
       )}
 
