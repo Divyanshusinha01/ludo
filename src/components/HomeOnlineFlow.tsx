@@ -22,7 +22,7 @@ import { MatchmakingPanel } from "./MatchmakingPanel";
 import { LiveGames } from "./LiveGames";
 import styles from "./HomeScreen.module.css";
 
-export type HomeOnlineMode = "online" | "create" | "join";
+export type HomeOnlineMode = "online" | "multiplayer" | "create" | "join";
 
 type Props = {
   mode: HomeOnlineMode;
@@ -137,6 +137,16 @@ export function HomeOnlineFlow({ mode, offline, onModeChange }: Props) {
           >
             Join Game
           </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => onModeChange("home")}
+          >
+            Back
+          </Button>
+        </div>
+      ) : mode === "multiplayer" ? (
+        <div className={styles.actions}>
           <MatchmakingPanel disabled={offline} />
           {!offline && <LiveGames />}
           <Button

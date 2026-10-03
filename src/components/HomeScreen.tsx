@@ -82,13 +82,24 @@ export function HomeScreen() {
           <Button
             type="button"
             variant="secondary"
+            disabled={offline}
+            onClick={() => {
+              if (offline) return;
+              setMode("multiplayer");
+            }}
+          >
+            Play Multiplayer
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
             onClick={() => router.push("/offline")}
           >
             Play Offline
           </Button>
           {offline && (
             <p className={styles.hint} role="status">
-              No internet — Play Online is unavailable. Use Play Offline.
+              No internet — online play is unavailable. Use Play Offline.
             </p>
           )}
           {!offline && <AuthPanel />}
