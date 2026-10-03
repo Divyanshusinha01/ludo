@@ -13,6 +13,8 @@ export const publicProfileValidator = v.object({
   gamesPlayed: v.number(),
   wins: v.number(),
   ratedGames: v.number(),
+  tokensCaptured: v.number(),
+  tokensLost: v.number(),
   createdAt: v.number(),
 });
 
@@ -25,6 +27,8 @@ export function toPublicProfile(p: Doc<"profiles">) {
     gamesPlayed: p.gamesPlayed,
     wins: p.wins,
     ratedGames: p.ratedGames,
+    tokensCaptured: p.tokensCaptured ?? 0,
+    tokensLost: p.tokensLost ?? 0,
     createdAt: p.createdAt,
   };
 }

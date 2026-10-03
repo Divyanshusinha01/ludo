@@ -47,27 +47,8 @@ export async function settleRankedRoom(
   }
   if (state.phase !== "finished") return { status: "skipped" };
 
-  const seats = await ctx.db
-    .query("players")
-    .withIndex("by_room", (q) => q.eq("roomId", roomId))
-    .collect();
-  const rated: Array<{ seat: Doc<"players">; profile: Doc<"profiles">; placement: number; won: boolean }> = [];
+  const rated = await accountSeatResults(ctx, roomId, state);
   const isTeamGame = state.mode === "2v2";
-  for (const seat of seats) {
-    if (!seat.accountId || seat.isBot) continue;
-    const profile = await ctx.db
-      .query("profiles")
-      .withIndex("by_account", (q) => q.eq("accountId", seat.accountId!))
-      .unique();
-    if (!profile) continue;
-    const color = seat.color as Color;
-    const index = state.rankings.indexOf(color);
-    const placement = index >= 0 ? index + 1 : state.seats.length;
-    const won = isTeamGame
-      ? state.winningTeam !== null && (seat.team ?? teamOfColor(color)) === state.winningTeam
-      : placement === 1;
-    rated.push({ seat, profile, placement, won });
-  }
 
   const voided =
     (reason !== null && VOID_REASONS.has(reason)) ||
@@ -109,9 +90,7 @@ export async function settleRankedRoom(
       rating: change.ratingAfter,
       peakRating: Math.max(profile.peakRating, change.ratingAfter),
       ratedGames: profile.ratedGames + 1,
-      gamesPlayed: profile.gamesPlayed + 1,
-      wins: profile.wins + (entry.won ? 1 : 0),
-      lastActiveAt: now,
+      ...gameStatsPatch(entry, now),
     });
     out.push({
       accountId: change.key,
@@ -130,6 +109,72 @@ export async function settleRankedRoom(
     deltas: out.map((c) => c.delta).join(","),
   });
   return { status: "rated", changes: out };
+}
+
+/**
+ * Add a finished private / vs-computer game to each signed-in seat's profile
+ * stats. Ratings are untouched. Runs once per game: the caller only invokes it
+ * on the commit that moves the room from playing to finished.
+ */
+export async function recordUnrankedStats(
+  ctx: MutationCtx,
+  roomId: Id<"rooms">,
+  state: GameState,
+  reason: FinishReason | null,
+  now: number,
+): Promise<void> {
+  if (state.phase !== "finished") return;
+  if (reason !== null && VOID_REASONS.has(reason)) return;
+  for (const entry of await accountSeatResults(ctx, roomId, state)) {
+    await ctx.db.patch(entry.profile._id, gameStatsPatch(entry, now));
+  }
+}
+
+type SeatResult = {
+  seat: Doc<"players">;
+  profile: Doc<"profiles">;
+  placement: number;
+  won: boolean;
+};
+
+/** Placement and result for every signed-in human seat in a finished game. */
+async function accountSeatResults(
+  ctx: MutationCtx,
+  roomId: Id<"rooms">,
+  state: GameState,
+): Promise<SeatResult[]> {
+  const seats = await ctx.db
+    .query("players")
+    .withIndex("by_room", (q) => q.eq("roomId", roomId))
+    .collect();
+  const out: SeatResult[] = [];
+  const isTeamGame = state.mode === "2v2";
+  for (const seat of seats) {
+    if (!seat.accountId || seat.isBot) continue;
+    const profile = await ctx.db
+      .query("profiles")
+      .withIndex("by_account", (q) => q.eq("accountId", seat.accountId!))
+      .unique();
+    if (!profile) continue;
+    const color = seat.color as Color;
+    const index = state.rankings.indexOf(color);
+    const placement = index >= 0 ? index + 1 : state.seats.length;
+    const won = isTeamGame
+      ? state.winningTeam !== null && (seat.team ?? teamOfColor(color)) === state.winningTeam
+      : placement === 1;
+    out.push({ seat, profile, placement, won });
+  }
+  return out;
+}
+
+function gameStatsPatch({ seat, profile, won }: SeatResult, now: number) {
+  return {
+    gamesPlayed: profile.gamesPlayed + 1,
+    wins: profile.wins + (won ? 1 : 0),
+    tokensCaptured: (profile.tokensCaptured ?? 0) + (seat.captures ?? 0),
+    tokensLost: (profile.tokensLost ?? 0) + (seat.tokensLost ?? 0),
+    lastActiveAt: now,
+  };
 }
 
 type ParticipantRow = {

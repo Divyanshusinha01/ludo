@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { INITIAL_RATING, K_ESTABLISHED, PROVISIONAL_GAMES } from "../../convex/lib/rating";
-import { settleRankedRoom } from "../../convex/lib/settlement";
+import { recordUnrankedStats, settleRankedRoom } from "../../convex/lib/settlement";
 import { loadGameState } from "../../convex/lib/gameStore";
 import { stubAuthEnv } from "./auth-helpers";
 import {
@@ -84,6 +84,19 @@ describe("rating settlement", () => {
         gamesPlayed: 1,
         wins: won ? 1 : 0,
       });
+    }
+
+    const captureEvents = await t.run(async (ctx) =>
+      (await ctx.db
+        .query("gameEvents")
+        .withIndex("by_game_seq", (q) => q.eq("gameId", room._id))
+        .collect()
+      ).flatMap((e) => (e.eventType === "TOKEN_CAPTURED" ? [e.payload] : [])),
+    );
+    for (const seat of seats) {
+      const profile = await profileOf(seat.accountId!);
+      expect(profile.tokensCaptured).toBe(captureEvents.filter((c) => c.byColor === seat.color).length);
+      expect(profile.tokensLost).toBe(captureEvents.filter((c) => c.victimColor === seat.color).length);
     }
     await expectLiveEqualsReplay(t, room._id);
   });
@@ -194,7 +207,7 @@ describe("rating settlement", () => {
 });
 
 describe("unrated games", () => {
-  it("a private room between signed-in players leaves ratings alone", async () => {
+  it("a private room between signed-in players counts toward stats but leaves ratings alone", async () => {
     const [a, b] = (await queuePlayers(t, 2)) as [QueuePlayer, QueuePlayer];
     const created = await a.user.mutation(api.rooms.createRoom, { clientId: a.clientId, name: "" });
     if (!("roomId" in created)) throw new Error("pending");
@@ -209,8 +222,25 @@ describe("unrated games", () => {
       expect(await profileOf(p.accountId)).toMatchObject({
         rating: INITIAL_RATING,
         ratedGames: 0,
-        gamesPlayed: 0,
+        gamesPlayed: 1,
+        wins: p === b ? 1 : 0,
       });
+    }
+  });
+
+  it("an abandoned private game is not counted", async () => {
+    const [a, b] = (await queuePlayers(t, 2)) as [QueuePlayer, QueuePlayer];
+    const created = await a.user.mutation(api.rooms.createRoom, { clientId: a.clientId, name: "" });
+    if (!("roomId" in created)) throw new Error("pending");
+    await b.user.mutation(api.rooms.joinRoom, { code: created.code, clientId: b.clientId, name: "" });
+    await t.mutation(api.rooms.startGame, { roomId: created.roomId, clientId: a.clientId });
+    await t.run(async (ctx) => {
+      const fresh = (await ctx.db.get(created.roomId))!;
+      const state = await loadGameState(ctx, fresh);
+      await recordUnrankedStats(ctx, created.roomId, { ...state, phase: "finished" }, "abandoned", Date.now());
+    });
+    for (const p of [a, b]) {
+      expect(await profileOf(p.accountId)).toMatchObject({ gamesPlayed: 0, wins: 0 });
     }
   });
 

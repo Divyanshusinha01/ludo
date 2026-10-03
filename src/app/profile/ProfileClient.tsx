@@ -7,6 +7,7 @@ import { api } from "../../../convex/_generated/api";
 import { AuthPanel } from "@/components/AuthPanel";
 import { Leaderboard } from "@/components/Leaderboard";
 import { MatchHistory } from "@/components/MatchHistory";
+import { ProfileStats } from "@/components/ProfileStats";
 import { Button, ErrorText, StatusText } from "@/components/ui";
 import {
   changePassword,
@@ -89,24 +90,7 @@ export function ProfileClient() {
       <p className={styles.muted}>@{auth.profile?.username}</p>
 
       {profile ? (
-        <dl className={styles.stats} aria-label="Stats">
-          <div>
-            <dt>Rating</dt>
-            <dd>{profile.rating}</dd>
-          </div>
-          <div>
-            <dt>Peak</dt>
-            <dd>{profile.peakRating}</dd>
-          </div>
-          <div>
-            <dt>Games</dt>
-            <dd>{profile.gamesPlayed}</dd>
-          </div>
-          <div>
-            <dt>Wins</dt>
-            <dd>{profile.wins}</dd>
-          </div>
-        </dl>
+        <ProfileStats profile={profile} />
       ) : (
         <StatusText>Loading stats…</StatusText>
       )}

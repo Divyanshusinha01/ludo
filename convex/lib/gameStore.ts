@@ -11,7 +11,7 @@ import { BOT_THINK_MS } from "./bot";
 import { GameError, fail } from "./errors";
 import { withEvents } from "./events";
 import { logEvent } from "./log";
-import { settleRankedRoom } from "./settlement";
+import { recordUnrankedStats, settleRankedRoom } from "./settlement";
 import {
   decide,
   describeEvent,
@@ -164,6 +164,30 @@ async function assertTailMatchesHead(
   }
 }
 
+/** Per-seat capture counts from one commit's events. */
+type CaptureTally = {
+  /** A GAME_STARTED in this commit zeroes the counters before adding. */
+  restarted: boolean;
+  captured: Map<Color, number>;
+  lost: Map<Color, number>;
+};
+
+function tallyCaptures(events: LudoEvent[]): CaptureTally {
+  const tally: CaptureTally = { restarted: false, captured: new Map(), lost: new Map() };
+  for (const event of events) {
+    if (event.eventType === "GAME_STARTED") {
+      tally.restarted = true;
+      tally.captured.clear();
+      tally.lost.clear();
+    } else if (event.eventType === "TOKEN_CAPTURED") {
+      const { byColor, victimColor } = event.payload;
+      tally.captured.set(byColor, (tally.captured.get(byColor) ?? 0) + 1);
+      tally.lost.set(victimColor, (tally.lost.get(victimColor) ?? 0) + 1);
+    }
+  }
+  return tally;
+}
+
 async function materializeState(
   ctx: MutationCtx,
   room: Doc<"rooms">,
@@ -171,6 +195,7 @@ async function materializeState(
   narratedTexts: string[],
   now: number,
   turnStartedAt: number | undefined,
+  tally: CaptureTally,
 ): Promise<void> {
   const players = await ctx.db
     .query("players")
@@ -191,6 +216,10 @@ async function materializeState(
     if (!!doc.eliminated !== seat.eliminated) patch.eliminated = seat.eliminated;
     const fr = seat.finishRank ?? undefined;
     if (doc.finishRank !== fr) patch.finishRank = fr;
+    const captures = (tally.restarted ? 0 : (doc.captures ?? 0)) + (tally.captured.get(seat.color) ?? 0);
+    if ((doc.captures ?? 0) !== captures) patch.captures = captures;
+    const tokensLost = (tally.restarted ? 0 : (doc.tokensLost ?? 0)) + (tally.lost.get(seat.color) ?? 0);
+    if ((doc.tokensLost ?? 0) !== tokensLost) patch.tokensLost = tokensLost;
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(doc._id, patch);
     }
@@ -352,17 +381,17 @@ export async function commitEvents(
     narrated,
     opts.now,
     clockRestart ? opts.now : undefined,
+    tallyCaptures(committed),
   );
 
   if (before.phase === "playing" && state.phase === "finished") {
     const finished = committed.find((e) => e.eventType === "GAME_FINISHED");
-    await settleRankedRoom(
-      ctx,
-      room._id,
-      state,
-      finished?.eventType === "GAME_FINISHED" ? finished.payload.reason : null,
-      opts.now,
-    );
+    const reason = finished?.eventType === "GAME_FINISHED" ? finished.payload.reason : null;
+    if (freshRoom.ranked) {
+      await settleRankedRoom(ctx, room._id, state, reason, opts.now);
+    } else {
+      await recordUnrankedStats(ctx, room._id, state, reason, opts.now);
+    }
   }
 
   // Every in-play commit re-arms both jobs at the new head; jobs armed at an

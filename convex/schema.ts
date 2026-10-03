@@ -140,6 +140,10 @@ export default defineSchema({
     leftAt: v.optional(v.number()),
     /** Signed-in account that took this seat; absent for anonymous seats and bots. */
     accountId: v.optional(v.id("accounts")),
+    /** Opponent tokens this seat sent home in the current game; reset on game start. */
+    captures: v.optional(v.number()),
+    /** This seat's tokens sent home by opponents in the current game; reset on game start. */
+    tokensLost: v.optional(v.number()),
   })
     .index("by_room", ["roomId"])
     .index("by_room_client", ["roomId", "clientId"])
@@ -166,9 +170,13 @@ export default defineSchema({
     displayName: v.string(),
     rating: v.number(),
     peakRating: v.number(),
+    /** Every finished game while signed in, ranked or not (abandoned games excluded). */
     gamesPlayed: v.number(),
     wins: v.number(),
     ratedGames: v.number(),
+    /** Absent on profiles created before capture tracking; read as 0. */
+    tokensCaptured: v.optional(v.number()),
+    tokensLost: v.optional(v.number()),
     createdAt: v.number(),
     lastActiveAt: v.number(),
   })

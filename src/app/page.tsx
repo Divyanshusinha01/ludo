@@ -1,4 +1,5 @@
 import { HomeScreen } from "@/components/HomeScreen";
+import { ProfileMenu } from "@/components/ProfileMenu";
 
 export default function Home() {
   return (
@@ -9,6 +10,9 @@ export default function Home() {
         minHeight: "100dvh",
       }}
     >
+      <header style={{ display: "flex", justifyContent: "flex-end", minHeight: "2.6rem" }}>
+        <ProfileMenu />
+      </header>
       <HomeScreen />
     </main>
   );

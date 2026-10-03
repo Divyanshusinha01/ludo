@@ -1,0 +1,107 @@
+.root {
+  position: relative;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.trigger {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  max-width: 12rem;
+  padding: 0.3rem 0.75rem 0.3rem 0.3rem;
+  border: 1px solid rgba(30, 24, 16, 0.14);
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.trigger[aria-expanded="true"] {
+  border-color: var(--accent);
+}
+
+.avatar {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #1a1208;
+  font-family: var(--font-display);
+  font-size: 1rem;
+}
+
+.username {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  z-index: 20;
+  width: min(20rem, calc(100vw - 2.5rem));
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+  border-radius: 16px;
+  border: 1px solid rgba(30, 24, 16, 0.12);
+  background: #f8eed6;
+  box-shadow: 0 12px 32px rgba(30, 24, 16, 0.18);
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.name {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.handle {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.status {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.9rem;
+}
+
+.linkButton {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  font: inherit;
+  cursor: pointer;
+  padding: 0.2rem;
+}

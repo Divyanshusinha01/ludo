@@ -173,6 +173,8 @@ export const createAccount = internalMutation({
       gamesPlayed: 0,
       wins: 0,
       ratedGames: 0,
+      tokensCaptured: 0,
+      tokensLost: 0,
       createdAt: now,
       lastActiveAt: now,
     });
