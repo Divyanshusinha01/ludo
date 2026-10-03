@@ -1,6 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
-import { ludoEventValidator } from "./lib/game/eventValidators";
+import { finishReasonValidator, ludoEventValidator } from "./lib/game/eventValidators";
 import {
   metricKindValidator,
   metricOutcomeValidator,
@@ -10,6 +10,7 @@ import {
 
 export { colorValidator } from "./lib/colors";
 import { colorValidator } from "./lib/colors";
+import { queueValidator } from "./lib/matchmaking";
 
 export const tokenValidator = v.object({
   index: v.number(),
@@ -92,6 +93,11 @@ export default defineSchema({
     /** Monotonic event log head (undefined on legacy rooms). */
     eventSeq: v.optional(v.number()),
     rulesVersion: v.optional(v.number()),
+    /** Created by the matchmaker: no rematch/kick, seats reclaimed by accountId. */
+    ranked: v.optional(v.boolean()),
+    queue: v.optional(queueValidator),
+    /** Set in the transaction that applied this ranked game's rating changes. */
+    ratingSettledAt: v.optional(v.number()),
   })
     .index("by_code", ["code"])
     .index("by_host", ["hostClientId"])
@@ -132,11 +138,142 @@ export default defineSchema({
      * the event-sourced game state) but no longer counts as present.
      */
     leftAt: v.optional(v.number()),
+    /** Signed-in account that took this seat; absent for anonymous seats and bots. */
+    accountId: v.optional(v.id("accounts")),
   })
     .index("by_room", ["roomId"])
     .index("by_room_client", ["roomId", "clientId"])
     .index("by_room_color", ["roomId", "color"])
-    .index("by_client", ["clientId"]),
+    .index("by_client", ["clientId"])
+    .index("by_account", ["accountId"]),
+
+  /** Credentials only. Never returned by a public function. */
+  accounts: defineTable({
+    /** Lowercased; uniqueness enforced in the signup mutation via by_username. */
+    username: v.string(),
+    passwordHash: v.string(),
+    salt: v.string(),
+    iterations: v.number(),
+    /** Bumped on password change; sessions from older versions are rejected. */
+    credentialVersion: v.number(),
+    passwordChangedAt: v.optional(v.number()),
+    createdAt: v.number(),
+  }).index("by_username", ["username"]),
+
+  profiles: defineTable({
+    accountId: v.id("accounts"),
+    username: v.string(),
+    displayName: v.string(),
+    rating: v.number(),
+    peakRating: v.number(),
+    gamesPlayed: v.number(),
+    wins: v.number(),
+    ratedGames: v.number(),
+    createdAt: v.number(),
+    lastActiveAt: v.number(),
+  })
+    .index("by_account", ["accountId"])
+    .index("by_username", ["username"])
+    .index("by_rating", ["rating"]),
+
+  /** Long-lived device sessions. Only the SHA-256 of the cookie secret is stored. */
+  authSessions: defineTable({
+    accountId: v.id("accounts"),
+    tokenHash: v.string(),
+    credentialVersion: v.number(),
+    createdAt: v.number(),
+    expiresAt: v.number(),
+    lastUsedAt: v.number(),
+  })
+    .index("by_token", ["tokenHash"])
+    .index("by_account", ["accountId"])
+    .index("by_expiresAt", ["expiresAt"]),
+
+  /**
+   * Fixed-window rate-limit counters. Keys embed keyed hashes of client IPs,
+   * never raw addresses (see lib/rateLimit.ts for the key shapes).
+   */
+  authAttempts: defineTable({
+    key: v.string(),
+    windowStart: v.number(),
+    count: v.number(),
+    lockedUntil: v.optional(v.number()),
+  })
+    .index("by_key", ["key"])
+    .index("by_windowStart", ["windowStart"]),
+
+  /**
+   * One ticket per account. `waiting` tickets are grouped by the matcher;
+   * `matched` tickets point at the ranked room until it ends.
+   */
+  matchQueue: defineTable({
+    accountId: v.id("accounts"),
+    /** Per-tab seat id the room seat is created with. */
+    clientId: v.string(),
+    displayName: v.string(),
+    queue: queueValidator,
+    rating: v.number(),
+    status: v.union(v.literal("waiting"), v.literal("matched")),
+    roomId: v.optional(v.id("rooms")),
+    color: v.optional(colorValidator),
+    joinedAt: v.number(),
+    lastPingAt: v.number(),
+  })
+    .index("by_account", ["accountId"])
+    .index("by_queue_status_joinedAt", ["queue", "status", "joinedAt"])
+    .index("by_status_lastPing", ["status", "lastPingAt"]),
+
+  /**
+   * One row per settled ranked game. Self-contained snapshot: it outlives the
+   * room (cleanup deletes rooms, never matches). `roomId` is the idempotency key.
+   */
+  matches: defineTable({
+    roomId: v.id("rooms"),
+    roomCode: v.string(),
+    queue: queueValidator,
+    mode: v.union(v.literal("1v1"), v.literal("2v2")),
+    startedAt: v.number(),
+    finishedAt: v.number(),
+    endReason: v.union(finishReasonValidator, v.null()),
+    /** False when the game closed with no rating change (e.g. abandoned). */
+    rated: v.boolean(),
+    winnerAccountIds: v.array(v.id("accounts")),
+  })
+    .index("by_room", ["roomId"])
+    .index("by_finishedAt", ["finishedAt"]),
+
+  /** One row per signed-in seat of a settled match; denormalized for history listing. */
+  matchParticipants: defineTable({
+    matchId: v.id("matches"),
+    accountId: v.id("accounts"),
+    username: v.string(),
+    displayName: v.string(),
+    color: colorValidator,
+    team: v.optional(v.union(v.literal("A"), v.literal("B"))),
+    placement: v.number(),
+    won: v.boolean(),
+    ratingBefore: v.number(),
+    ratingAfter: v.number(),
+    delta: v.number(),
+    queue: queueValidator,
+    rated: v.boolean(),
+    finishedAt: v.number(),
+  })
+    .index("by_account_finishedAt", ["accountId", "finishedAt"])
+    .index("by_match", ["matchId"]),
+
+  /**
+   * Read-only watchers of a room. Never seated; `spectatorId` is the watcher's
+   * per-tab id and is never returned by a public function.
+   */
+  spectators: defineTable({
+    roomId: v.id("rooms"),
+    spectatorId: v.string(),
+    lastSeenAt: v.number(),
+  })
+    .index("by_room", ["roomId"])
+    .index("by_room_spectator", ["roomId", "spectatorId"])
+    .index("by_lastSeenAt", ["lastSeenAt"]),
 
   tokens: defineTable({
     roomId: v.id("rooms"),

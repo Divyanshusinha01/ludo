@@ -1,6 +1,6 @@
 # Family Ludo
 
-2–4 player online Ludo for phones. Next.js + Convex realtime. No accounts — just room codes.
+2–4 player online Ludo for phones. Next.js + Convex realtime. Play anonymously with a room code, or sign in with an optional username + password account (remembered per device) for ranked matchmaking (1v1 duel, 4-player free-for-all, 2v2), Elo ratings, match history, a leaderboard and live spectating.
 
 ## Stack
 
@@ -27,6 +27,10 @@ Debug replay UI: `/debug/replay/[CODE]` in development, or set `NEXT_PUBLIC_ENAB
 ## Operations
 
 [docs/operations.md](docs/operations.md) covers the version and reconnect model, metrics and the `/ops` dashboard, k6 load tests with measured results, and troubleshooting.
+
+[docs/multiplayer.md](docs/multiplayer.md) covers accounts and sessions, the ranked queue lifecycle, the rating formula, settlement idempotency, match history, spectators, and deploying the (additive, no-backfill) schema.
+
+Accounts: run `node scripts/generate-auth-keys.mjs` and set the printed `AUTH_JWT_PRIVATE_KEY` + `AUTH_SERVER_SECRET` in the Next.js env (`.env.local` / Vercel) and `AUTH_JWKS` + the same `AUTH_SERVER_SECRET` in Convex (`npx convex env set ...`). Convex refuses to push `convex/auth.config.ts` until `AUTH_JWKS` is set on that deployment, so set it before the next `npx convex dev` / `npx convex deploy`. If the Next.js values are missing, anonymous play still works and the sign-in routes return 503.
 
 Ops dashboard: `/ops` in development, or set `NEXT_PUBLIC_ENABLE_OPS_DASHBOARD=1` in production. It also needs the `OPS_DASHBOARD_TOKEN` Convex environment variable (`npx convex env set OPS_DASHBOARD_TOKEN <value>`).
 
@@ -88,6 +92,8 @@ Then import the repo in Vercel and set `NEXT_PUBLIC_CONVEX_URL`.
 4. On your turn: roll the dice, tap a glowing token to move
 5. After a win: **Play again** for a rematch, or go home
 
+Ranked: sign in, open **Play Online**, pick a queue and tap **Find match**. You are matched with players of similar rating and the game starts automatically; your rating change shows when it ends and on your profile. Ranked games have no rematch, and leaving counts as a loss. **Watch live** lists ranked games in progress.
+
 ### Rules implemented
 
 - Need a **6** to leave home
@@ -105,3 +111,5 @@ Then import the repo in Vercel and set `NEXT_PUBLIC_CONVEX_URL`.
 ### Privacy
 
 Your session id stays in this device’s browser storage and is never returned to other players in room queries. Session ids must be valid UUIDs; room creation is lightly rate-limited.
+
+Accounts are optional. If you sign in, your password is stored only as a salted PBKDF2 hash and your session lives in an httpOnly cookie that page scripts cannot read. Other players and spectators see your display name, username and rating, never account or session ids.

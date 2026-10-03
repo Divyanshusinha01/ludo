@@ -10,12 +10,13 @@ export const HEARTBEAT_MS = 20_000;
 /** Second heartbeat after a wake-up, once the server's soft window has passed. */
 export const WAKE_RETRY_MS = HEARTBEAT_MIN_INTERVAL_MS + 250;
 
-/** Keep presence alive while a room screen is mounted. */
-export function useRoomPresence(roomId: Id<"rooms">, clientId: string) {
+/** Keep presence alive while a room screen is mounted. Spectators pass `enabled: false`. */
+export function useRoomPresence(roomId: Id<"rooms">, clientId: string, enabled = true) {
   const heartbeat = useMutation(api.rooms.heartbeat);
   const markDisconnected = useMutation(api.rooms.markDisconnected);
 
   useEffect(() => {
+    if (!enabled) return;
     const tick = () => {
       void heartbeat({ roomId, clientId });
     };
@@ -46,5 +47,5 @@ export function useRoomPresence(roomId: Id<"rooms">, clientId: string) {
       window.removeEventListener("online", wake);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [roomId, clientId, heartbeat, markDisconnected]);
+  }, [roomId, clientId, heartbeat, markDisconnected, enabled]);
 }

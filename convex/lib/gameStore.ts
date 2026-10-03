@@ -11,6 +11,7 @@ import { BOT_THINK_MS } from "./bot";
 import { GameError, fail } from "./errors";
 import { withEvents } from "./events";
 import { logEvent } from "./log";
+import { settleRankedRoom } from "./settlement";
 import {
   decide,
   describeEvent,
@@ -352,6 +353,17 @@ export async function commitEvents(
     opts.now,
     clockRestart ? opts.now : undefined,
   );
+
+  if (before.phase === "playing" && state.phase === "finished") {
+    const finished = committed.find((e) => e.eventType === "GAME_FINISHED");
+    await settleRankedRoom(
+      ctx,
+      room._id,
+      state,
+      finished?.eventType === "GAME_FINISHED" ? finished.payload.reason : null,
+      opts.now,
+    );
+  }
 
   // Every in-play commit re-arms both jobs at the new head; jobs armed at an
   // older head see a different eventSeq and do nothing.

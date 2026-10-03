@@ -1,7 +1,8 @@
 "use client";
 
-import { ConvexProvider, ConvexReactClient } from "convex/react";
+import { ConvexProviderWithAuth, ConvexReactClient } from "convex/react";
 import { ReactNode, useMemo } from "react";
+import { useConvexAuthBridge } from "@/lib/auth";
 
 export function ConvexClientProvider({ children }: { children: ReactNode }) {
   const url = process.env.NEXT_PUBLIC_CONVEX_URL;
@@ -37,5 +38,10 @@ export function ConvexClientProvider({ children }: { children: ReactNode }) {
     );
   }
 
-  return <ConvexProvider client={client}>{children}</ConvexProvider>;
+  // Anonymous visitors get no token and keep playing exactly as before.
+  return (
+    <ConvexProviderWithAuth client={client} useAuth={useConvexAuthBridge}>
+      {children}
+    </ConvexProviderWithAuth>
+  );
 }

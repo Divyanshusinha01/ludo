@@ -2,6 +2,9 @@ import { internalMutation, MutationCtx } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { Color } from "./lib/ludo";
 import { logEvent } from "./lib/log";
+import { ATTEMPT_ROW_TTL_MS } from "./lib/rateLimit";
+import { purgeQueueTickets } from "./lib/matchQueue";
+import { purgeStaleSpectators } from "./lib/spectate";
 import { commitCommand, loadGameState } from "./lib/gameStore";
 import { clearChatForRoom, clearVoiceForRoom, deleteRoomCascade } from "./lib/roomAuth";
 
@@ -20,10 +23,31 @@ const REJOIN_PENDING_TTL_MS = 3 * 60 * 1000;
 /** Drop orphaned WebRTC signals (tab died mid-negotiation). */
 const VOICE_SIGNAL_TTL_MS = 3 * 60 * 1000;
 
+/** Bounded per tick; leftovers are picked up next minute. */
+const AUTH_PURGE_BATCH = 200;
+
 export const tick = internalMutation({
   args: {},
   handler: async (ctx) => {
     const now = Date.now();
+
+    const expiredSessions = await ctx.db
+      .query("authSessions")
+      .withIndex("by_expiresAt", (q) => q.lt("expiresAt", now))
+      .take(AUTH_PURGE_BATCH);
+    for (const s of expiredSessions) await ctx.db.delete(s._id);
+
+    const staleAttempts = await ctx.db
+      .query("authAttempts")
+      .withIndex("by_windowStart", (q) => q.lt("windowStart", now - ATTEMPT_ROW_TTL_MS))
+      .take(AUTH_PURGE_BATCH);
+    for (const a of staleAttempts) {
+      if (a.lockedUntil !== undefined && a.lockedUntil > now) continue;
+      await ctx.db.delete(a._id);
+    }
+
+    await purgeQueueTickets(ctx, now, AUTH_PURGE_BATCH);
+    await purgeStaleSpectators(ctx, now, AUTH_PURGE_BATCH);
 
     // Orphaned voice signals (no by_createdAt index — scan is fine; volume is low).
     const voiceSignals = await ctx.db.query("voiceSignals").collect();

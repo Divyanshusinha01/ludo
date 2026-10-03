@@ -5,15 +5,10 @@ import { internal } from "./_generated/api";
 import {
   COLORS,
   Color,
-  buildFinalRankings,
-  createInitialTokens,
-  generateRoomCode,
   MAX_TIMEOUT_LIVES,
-  nextColorAmong,
   pickNextColor,
   pickNextColorForTeam,
   teamOfColor,
-  shouldAssignAutomaticLoser,
   TURN_TIMEOUT_MS,
   Team,
 } from "./lib/ludo";
@@ -31,6 +26,7 @@ import {
   sanitizePlayerName,
 } from "./lib/session";
 import { colorValidator } from "./schema";
+import { optionalAccount } from "./lib/auth";
 import { freshEvents, withEvent, withEvents } from "./lib/events";
 import {
   clearChatForRoom,
@@ -49,18 +45,15 @@ import {
   CURRENT_RULES_VERSION,
   type LudoEventDraft,
 } from "./lib/game/eventValidators";
-
-async function uniqueCode(ctx: MutationCtx): Promise<string> {
-  for (let i = 0; i < 20; i++) {
-    const code = generateRoomCode();
-    const existing = await ctx.db
-      .query("rooms")
-      .withIndex("by_code", (q) => q.eq("code", code))
-      .unique();
-    if (!existing) return code;
-  }
-  throw new Error("Could not generate room code");
-}
+import {
+  buildMatchStartDrafts,
+  createStartedRoom,
+  playerJoinedDraft,
+  seatedFromPlayers,
+  uniqueCode,
+  type StartedSeat,
+} from "./lib/roomFactory";
+import { SEAT_LIVE_MS } from "./lib/matchmaking";
 
 /** Newest hosted room only — avoid scanning every room this client ever created. */
 async function assertCreateNotRateLimited(
@@ -98,6 +91,7 @@ function publicRoom(room: Doc<"rooms">) {
     createdAt: room.createdAt,
     finishedAt: room.finishedAt ?? null,
     vsComputer: !!room.vsComputer,
+    ranked: !!room.ranked,
     mode: room.mode === "2v2" ? ("2v2" as const) : ("1v1" as const),
     winningTeam: room.winningTeam ?? null,
     passedRollTo: room.passedRollTo ?? null,
@@ -128,7 +122,8 @@ function countOnTeam(players: Doc<"players">[], team: Team): number {
   return players.filter((p) => p.team === team).length;
 }
 
-async function loadRoomBundle(
+/** Public room view. A null session (spectators) yields no `me` and every `isMe` false. */
+export async function loadRoomBundle(
   ctx: QueryCtx,
   room: Doc<"rooms">,
   sessionId: string | null,
@@ -172,35 +167,6 @@ async function loadRoomBundle(
   };
 }
 
-function seatedFromPlayers(players: Array<Pick<Doc<"players">, "color">>): Color[] {
-  return COLORS.filter((c) => players.some((p) => p.color === c)) as Color[];
-}
-
-type SeatSource = Pick<Doc<"players">, "color" | "name" | "isBot" | "team">;
-
-function seatSnapshot(p: SeatSource) {
-  return {
-    color: p.color as Color,
-    name: p.name,
-    isBot: !!p.isBot,
-    ...(p.team ? { team: p.team } : {}),
-  };
-}
-
-function playerJoinedDraft(
-  roomId: Id<"rooms">,
-  p: SeatSource,
-  now: number,
-): LudoEventDraft {
-  return {
-    gameId: roomId,
-    createdAt: now,
-    actor: { kind: "seat", color: p.color as Color },
-    eventType: "PLAYER_JOINED",
-    payload: { seat: seatSnapshot(p) },
-  };
-}
-
 function playerLeftDraft(
   roomId: Id<"rooms">,
   color: Color,
@@ -214,45 +180,6 @@ function playerLeftDraft(
     eventType: "PLAYER_LEFT",
     payload: { color, reason },
   };
-}
-
-function buildMatchStartDrafts(
-  room: Doc<"rooms">,
-  players: SeatSource[],
-  now: number,
-): LudoEventDraft[] {
-  const mode = room.mode === "2v2" ? "2v2" : "1v1";
-  const seats = players.map((p) => ({
-    color: p.color as Color,
-    name: p.name,
-    isBot: !!p.isBot,
-    team: p.team,
-    lives: MAX_TIMEOUT_LIVES,
-    eliminated: false,
-    finishRank: null as number | null,
-  }));
-  const activeColors = seatedFromPlayers(players);
-  const first = activeColors[0] ?? ("red" as Color);
-  return [
-    {
-      gameId: room._id,
-      createdAt: now,
-      actor: { kind: "system" },
-      eventType: "GAME_STARTED",
-      payload: {
-        rulesVersion: room.rulesVersion ?? CURRENT_RULES_VERSION,
-        mode,
-        seats,
-      },
-    },
-    {
-      gameId: room._id,
-      createdAt: now,
-      actor: { kind: "system" },
-      eventType: "TURN_STARTED",
-      payload: { seat: first },
-    },
-  ];
 }
 
 /** Next host among humans only — bots must never become host. */
@@ -348,8 +275,9 @@ export const createRoom = mutation({
   returns: joinResultValidator,
   handler: (ctx, args) => withOutcomeLogging(ctx, "rooms:createRoom", undefined, async () => {
     const clientId = assertValidClientId(args.clientId);
-    const name = sanitizePlayerName(args.name);
     const now = Date.now();
+    const signedIn = await optionalAccount(ctx, now);
+    const name = sanitizePlayerName(args.name, signedIn?.profile.displayName);
     const gameMode = args.mode === "2v2" ? "2v2" : "1v1";
 
     await assertCreateNotRateLimited(ctx, clientId, now);
@@ -415,6 +343,7 @@ export const createRoom = mutation({
       lives: MAX_TIMEOUT_LIVES,
       eliminated: false,
       ...(gameMode === "2v2" ? { team: "A" as const } : {}),
+      ...(signedIn ? { accountId: signedIn.account._id } : {}),
     });
 
     logEvent("room_created", { roomCode: code, clientId });
@@ -475,78 +404,20 @@ export const createVsComputer = mutation({
       await assertCreateNotRateLimited(ctx, clientId, now);
     }
 
-    const code = await uniqueCode(ctx);
     const hostColor = COLORS[0]!;
-
-    const roomId = await ctx.db.insert("rooms", {
-      code,
-      status: "lobby",
-      hostClientId: clientId,
-      currentTurn: "red",
-      diceValue: null,
-      diceRolled: false,
-      consecutiveSixes: 0,
-      winner: null,
-      lastEvent: `${name} vs computer`,
-      createdAt: now,
-      lastActivityAt: now,
-      seatedColors: [hostColor],
-      vsComputer: true,
-      eventSeq: 0,
-      rulesVersion: CURRENT_RULES_VERSION,
-    });
-
-    const seats: Array<SeatSource & { clientId: string }> = [
-      { color: hostColor, name, isBot: false, clientId },
-    ];
+    const seats: StartedSeat[] = [{ color: hostColor, name, isBot: false, clientId }];
     for (let i = 0; i < botCount; i++) {
-      const color = pickNextColor(seats.map((s) => s.color as Color));
+      const color = pickNextColor(seats.map((s) => s.color));
       if (!color) break;
-      seats.push({
-        color,
-        name: botDisplayName(i),
-        isBot: true,
-        clientId: botClientId(roomId, color),
-      });
+      seats.push({ color, name: botDisplayName(i), isBot: true, clientId: "" });
     }
 
-    const roomDoc = (await ctx.db.get(roomId))!;
-    await commitEventsBootstrap(
-      ctx,
-      roomId,
-      [
-        {
-          gameId: roomId,
-          createdAt: now,
-          actor: { kind: "system" },
-          eventType: "GAME_CREATED",
-          payload: {
-            mode: "1v1",
-            vsComputer: true,
-            rulesVersion: CURRENT_RULES_VERSION,
-            host: seatSnapshot(seats[0]!),
-          },
-        },
-        ...seats.map((s) => playerJoinedDraft(roomId, s, now)),
-        ...buildMatchStartDrafts(roomDoc, seats, now),
-      ],
-      { now, actorClientId: clientId },
-    );
-
-    for (const s of seats) {
-      await ctx.db.insert("players", {
-        roomId,
-        clientId: s.clientId,
-        name: s.name,
-        color: s.color,
-        connected: true,
-        lastSeenAt: now,
-        joinedAt: now,
-        lives: MAX_TIMEOUT_LIVES,
-        eliminated: false,
-        isBot: !!s.isBot,
-      });
-    }
+    const { roomId, code } = await createStartedRoom(ctx, {
+      kind: "vsComputer",
+      seats,
+      lastEvent: `${name} vs computer`,
+      now,
+    });
 
     logEvent("vs_computer_created", {
       roomCode: code,
@@ -573,6 +444,7 @@ export const addBot = mutation({
     const room = await ctx.db.get(args.roomId);
     if (!room) fail(GameError.roomNotFound);
     if (room.hostClientId !== clientId) fail(GameError.onlyHost);
+    if (room.ranked) fail(GameError.rankedLocked);
     if (room.status !== "lobby") fail(GameError.gameStarted);
     if (room.vsComputer) fail(GameError.vsComputerOnly);
 
@@ -687,7 +559,8 @@ export const joinRoom = mutation({
   handler: (ctx, args) => withOutcomeLogging(ctx, "rooms:joinRoom", undefined, async () => {
     const clientId = assertValidClientId(args.clientId);
     const code = assertValidRoomCode(args.code);
-    const name = sanitizePlayerName(args.name);
+    const signedIn = await optionalAccount(ctx, Date.now());
+    const name = sanitizePlayerName(args.name, signedIn?.profile.displayName);
     const room = await ctx.db
       .query("rooms")
       .withIndex("by_code", (q) => q.eq("code", code))
@@ -732,6 +605,20 @@ export const joinRoom = mutation({
       .withIndex("by_room", (q) => q.eq("roomId", room._id))
       .collect();
 
+    // Ranked seats belong to accounts: the owner reclaims from any tab with
+    // no host approval; nobody else can sit down.
+    if (room.ranked) {
+      const seat = signedIn
+        ? players.find((p) => p.accountId === signedIn.account._id)
+        : undefined;
+      if (!seat) fail(GameError.rankedSeatsOnly);
+      if (seat.leftAt !== undefined) fail(GameError.seatForfeited);
+      if (seat.connected && now - seat.lastSeenAt < SEAT_LIVE_MS) {
+        fail(GameError.seatInUse);
+      }
+      return await claimDisconnectedSeat(ctx, seat, room, clientId, now);
+    }
+
     // Name-based reclaim: same name as a disconnected seat, different clientId.
     const nameMatch = players.find(
       (p) =>
@@ -742,6 +629,10 @@ export const joinRoom = mutation({
 
     if (nameMatch) {
       if (nameMatch.connected) {
+        fail(GameError.nameTaken);
+      }
+      // An account-linked seat can only be reclaimed by that same account.
+      if (nameMatch.accountId && nameMatch.accountId !== signedIn?.account._id) {
         fail(GameError.nameTaken);
       }
       if (nameMatch.eliminated) {
@@ -878,6 +769,7 @@ export const joinRoom = mutation({
       lives: MAX_TIMEOUT_LIVES,
       eliminated: false,
       ...(joinTeam ? { team: joinTeam } : {}),
+      ...(signedIn ? { accountId: signedIn.account._id } : {}),
     });
 
     // Defend against rare double-insert same colour.
@@ -1228,6 +1120,7 @@ export const kickPlayer = mutation({
     const clientId = assertValidClientId(args.clientId);
     const room = await ctx.db.get(args.roomId);
     if (!room) fail(GameError.roomNotFound);
+    if (room.ranked) fail(GameError.rankedLocked);
     if (room.hostClientId !== clientId) {
       fail(GameError.onlyHost);
     }
@@ -1335,6 +1228,7 @@ export const rematch = mutation({
     const clientId = assertValidClientId(args.clientId);
     const room = await ctx.db.get(args.roomId);
     if (!room) fail(GameError.roomNotFound);
+    if (room.ranked) fail(GameError.rankedNoRematch);
     if (room.status !== "finished") {
       fail(GameError.notFinished);
     }
@@ -1402,74 +1296,74 @@ export const rematch = mutation({
   }),
 });
 
-const roomBundleValidator = v.union(
-  v.object({
-    room: v.object({
-      _id: v.id("rooms"),
-      code: v.string(),
-      status: v.union(
-        v.literal("lobby"),
-        v.literal("playing"),
-        v.literal("finished"),
-      ),
-      currentTurn: colorValidator,
-      diceValue: v.union(v.number(), v.null()),
-      diceRolled: v.boolean(),
-      consecutiveSixes: v.number(),
-      turnId: v.number(),
-      turnStartedAt: v.union(v.number(), v.null()),
-      turnTimeoutMs: v.number(),
-      winner: v.union(colorValidator, v.null()),
-      rankings: v.array(colorValidator),
-      lastEvent: v.optional(v.string()),
-      events: v.array(
-        v.object({
-          at: v.number(),
-          text: v.string(),
-        }),
-      ),
-      createdAt: v.number(),
-      finishedAt: v.union(v.number(), v.null()),
-      vsComputer: v.boolean(),
-      mode: v.union(v.literal("1v1"), v.literal("2v2")),
-      winningTeam: v.union(v.literal("A"), v.literal("B"), v.null()),
-      passedRollTo: v.union(colorValidator, v.null()),
-      eventSeq: v.number(),
-    }),
-    players: v.array(
+export const roomBundleObjectValidator = v.object({
+  room: v.object({
+    _id: v.id("rooms"),
+    code: v.string(),
+    status: v.union(
+      v.literal("lobby"),
+      v.literal("playing"),
+      v.literal("finished"),
+    ),
+    currentTurn: colorValidator,
+    diceValue: v.union(v.number(), v.null()),
+    diceRolled: v.boolean(),
+    consecutiveSixes: v.number(),
+    turnId: v.number(),
+    turnStartedAt: v.union(v.number(), v.null()),
+    turnTimeoutMs: v.number(),
+    winner: v.union(colorValidator, v.null()),
+    rankings: v.array(colorValidator),
+    lastEvent: v.optional(v.string()),
+    events: v.array(
       v.object({
-        _id: v.id("players"),
-        name: v.string(),
-        color: colorValidator,
-        connected: v.boolean(),
-        lives: v.number(),
-        eliminated: v.boolean(),
-        finishRank: v.union(v.number(), v.null()),
-        isMe: v.boolean(),
-        isHost: v.boolean(),
-        isBot: v.boolean(),
-        team: v.union(v.literal("A"), v.literal("B"), v.null()),
+        at: v.number(),
+        text: v.string(),
       }),
     ),
-    tokens: v.array(
-      v.object({
-        _id: v.id("tokens"),
-        color: colorValidator,
-        index: v.number(),
-        steps: v.number(),
-      }),
-    ),
-    me: v.union(
-      v.object({
-        color: colorValidator,
-        name: v.string(),
-        isHost: v.boolean(),
-      }),
-      v.null(),
-    ),
+    createdAt: v.number(),
+    finishedAt: v.union(v.number(), v.null()),
+    vsComputer: v.boolean(),
+    ranked: v.boolean(),
+    mode: v.union(v.literal("1v1"), v.literal("2v2")),
+    winningTeam: v.union(v.literal("A"), v.literal("B"), v.null()),
+    passedRollTo: v.union(colorValidator, v.null()),
+    eventSeq: v.number(),
   }),
-  v.null(),
-);
+  players: v.array(
+    v.object({
+      _id: v.id("players"),
+      name: v.string(),
+      color: colorValidator,
+      connected: v.boolean(),
+      lives: v.number(),
+      eliminated: v.boolean(),
+      finishRank: v.union(v.number(), v.null()),
+      isMe: v.boolean(),
+      isHost: v.boolean(),
+      isBot: v.boolean(),
+      team: v.union(v.literal("A"), v.literal("B"), v.null()),
+    }),
+  ),
+  tokens: v.array(
+    v.object({
+      _id: v.id("tokens"),
+      color: colorValidator,
+      index: v.number(),
+      steps: v.number(),
+    }),
+  ),
+  me: v.union(
+    v.object({
+      color: colorValidator,
+      name: v.string(),
+      isHost: v.boolean(),
+    }),
+    v.null(),
+  ),
+});
+
+const roomBundleValidator = v.union(roomBundleObjectValidator, v.null());
 
 export const getRoomByCode = query({
   args: {
