@@ -114,6 +114,12 @@ export async function deleteRoomCascade(
     for (const r of requests) await ctx.db.delete(r._id);
   }
 
+  const spectators = await ctx.db
+    .query("spectators")
+    .withIndex("by_room", (q) => q.eq("roomId", roomId))
+    .collect();
+  for (const s of spectators) await ctx.db.delete(s._id);
+
   await ctx.db.delete(roomId);
   if (room) {
     logEvent("room_cleaned", {

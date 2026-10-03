@@ -9,6 +9,8 @@ crons.interval(
   internal.cleanup.tick,
 );
 
+crons.interval("matchmaking sweep", { seconds: 10 }, internal.matchmaking.sweep, {});
+
 crons.interval("ops metrics rollup", { minutes: 1 }, internal.ops.rollup, {});
 
 export default crons;

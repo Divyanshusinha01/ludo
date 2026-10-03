@@ -38,6 +38,16 @@ export const GameError = {
   legacyRoom: "Start a new game — this room is no longer supported",
   invalidMetrics: "Invalid metrics batch",
   unauthorized: "Not authorized",
+  signInToQueue: "Sign in to play ranked",
+  rankedNoRematch: "Ranked games have no rematch — find a new match",
+  rankedLocked: "Ranked games can't be changed by the host",
+  rankedSeatsOnly: "Only matched players can join a ranked game",
+  seatInUse: "You're already playing this game in another tab",
+  seatForfeited: "You left this ranked game",
+  notSpectatable: "This game can't be watched",
+  spectateNotStarted: "This game hasn't started yet",
+  spectatorsFull: "Too many people are watching this game",
+  spectatorIsPlayer: "You're playing in this game",
 } as const;
 
 export type GameErrorMessage = (typeof GameError)[keyof typeof GameError];

@@ -6,17 +6,19 @@ import { api } from "../../convex/_generated/api";
 import { Id } from "../../convex/_generated/dataModel";
 import { OPS_FLUSH_MS, OpsReporter } from "@/lib/opsReporter";
 
-/** One batched metrics reporter per mounted room screen. */
+/** One batched metrics reporter per mounted room screen. Disabled reporters never send. */
 export function useOpsReporter(
   roomId: Id<"rooms">,
   clientId: string,
+  enabled = true,
 ): OpsReporter {
   const report = useMutation(api.ops.reportClientEvents);
   const [reporter] = useState(() => new OpsReporter());
 
   useEffect(() => {
+    if (!enabled) return;
     reporter.setSend((events) => report({ roomId, clientId, events }));
-  }, [reporter, report, roomId, clientId]);
+  }, [reporter, report, roomId, clientId, enabled]);
 
   useEffect(() => {
     const flush = () => {

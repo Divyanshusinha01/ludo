@@ -17,6 +17,9 @@ import {
   isTroubleshootCoolingDown,
   runTroubleshoot,
 } from "@/lib/troubleshoot";
+import { useAuthState } from "@/lib/auth";
+import { MatchmakingPanel } from "./MatchmakingPanel";
+import { LiveGames } from "./LiveGames";
 import styles from "./HomeScreen.module.css";
 
 export type HomeOnlineMode = "online" | "create" | "join";
@@ -31,7 +34,9 @@ export function HomeOnlineFlow({ mode, offline, onModeChange }: Props) {
   const router = useRouter();
   const createRoom = useMutation(api.rooms.createRoom);
   const reportTrouble = useMutation(api.trouble.reportTrouble);
-  const [name, setName] = useState("");
+  const { profile } = useAuthState();
+  const [nameDraft, setName] = useState<string | null>(null);
+  const name = nameDraft ?? profile?.displayName ?? "";
   const [gameMode, setGameMode] = useState<"1v1" | "2v2">("1v1");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
@@ -132,6 +137,8 @@ export function HomeOnlineFlow({ mode, offline, onModeChange }: Props) {
           >
             Join Game
           </Button>
+          <MatchmakingPanel disabled={offline} />
+          {!offline && <LiveGames />}
           <Button
             type="button"
             variant="secondary"

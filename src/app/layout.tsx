@@ -20,7 +20,7 @@ const body = DM_Sans({
 
 export const metadata: Metadata = {
   title: "Family Ludo",
-  description: "Play 2–4 player Ludo online with a room code — no accounts needed.",
+  description: "Play 2–4 player Ludo online with a room code — accounts optional.",
   manifest: "/manifest.json",
   icons: {
     icon: [

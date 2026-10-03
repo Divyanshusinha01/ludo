@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "./ui";
 import { bindAudioUnlock } from "@/lib/sounds";
 import { InstallHint } from "./InstallHint";
+import { AuthPanel } from "./AuthPanel";
 import { HomeOnlineGate } from "./HomeOnlineGate";
 import type { HomeOnlineMode } from "./HomeOnlineFlow";
 import styles from "./HomeScreen.module.css";
@@ -90,6 +91,7 @@ export function HomeScreen() {
               No internet — Play Online is unavailable. Use Play Offline.
             </p>
           )}
+          {!offline && <AuthPanel />}
         </div>
       ) : (
         <HomeOnlineGate

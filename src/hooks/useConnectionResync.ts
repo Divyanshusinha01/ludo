@@ -22,11 +22,14 @@ export function useConnectionResync({
   clientId,
   eventSeq,
   reporter,
+  seated = true,
 }: {
   roomId: Id<"rooms">;
   clientId: string;
   eventSeq: number;
   reporter: OpsReporter;
+  /** Spectators only track the socket; they have no seat to heartbeat. */
+  seated?: boolean;
 }): { connected: boolean } {
   const client = useConvex();
   const heartbeat = useMutation(api.rooms.heartbeat);
@@ -70,6 +73,7 @@ export function useConnectionResync({
     };
 
     const onReconnect = () => {
+      if (!seated) return;
       const attempt: PendingReconnect = {
         startedAt: performance.now(),
         lastSeenSeq: lastSeenSeq.current,
@@ -104,7 +108,7 @@ export function useConnectionResync({
       else failPending("Disconnected again before resync");
     });
     return unsubscribe;
-  }, [client, heartbeat, roomId, clientId, reporter]);
+  }, [client, heartbeat, roomId, clientId, reporter, seated]);
 
   return { connected };
 }

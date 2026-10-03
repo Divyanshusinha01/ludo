@@ -95,6 +95,15 @@
   color: var(--muted);
 }
 
+.spectatingBadge {
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(30, 24, 16, 0.08);
+  color: var(--ink, inherit);
+  letter-spacing: 0.04em;
+}
+
 .title {
   margin: 0.15rem 0 0;
   font-family: var(--font-display);
@@ -476,6 +485,32 @@
   justify-content: center;
   flex-wrap: wrap;
   align-items: center;
+}
+
+.ratingBanner {
+  display: flex;
+  justify-content: center;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: 10px;
+  background: rgba(30, 24, 16, 0.06);
+  font-family: var(--font-display);
+  color: var(--ink);
+}
+
+.ratingBanner span {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.ratingUp strong {
+  color: #1f8a4c;
+}
+
+.ratingDown strong {
+  color: #c0392b;
 }
 
 @keyframes yourTurnIn {

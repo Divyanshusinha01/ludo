@@ -109,6 +109,7 @@ export function toOfflineBundle(state: OfflineGameState): OfflineBundle {
       createdAt: state.createdAt,
       finishedAt: state.finishedAt,
       vsComputer: false,
+      ranked: false,
       mode: "1v1" as const,
       winningTeam: null,
       passedRollTo: null,

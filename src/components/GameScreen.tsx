@@ -45,6 +45,7 @@ import {
   runTroubleshoot,
 } from "@/lib/troubleshoot";
 import type { RoomBundle } from "./Lobby";
+import { RatingResultBanner } from "./RatingResultBanner";
 import { RejoinRequests } from "./RejoinRequests";
 import styles from "./GameScreen.module.css";
 
@@ -52,6 +53,8 @@ type Props = {
   data: RoomBundle;
   roomId: Id<"rooms">;
   clientId: string;
+  /** Read-only watcher view: no seat, no controls, no seat heartbeats or metrics. */
+  spectate?: { count: number };
 };
 
 /** Apply mutation result locally so joiners don't wait on query sync. */
@@ -96,7 +99,8 @@ function useTurnCountdown(
   return Math.max(0, turnStartedAt + timeoutMs - now);
 }
 
-export function GameScreen({ data, roomId, clientId }: Props) {
+export function GameScreen({ data, roomId, clientId, spectate }: Props) {
+  const readOnly = !!spectate;
   const router = useRouter();
   const rollDice = useMutation(api.game.rollDice);
   const moveToken = useMutation(api.game.moveToken);
@@ -125,13 +129,14 @@ export function GameScreen({ data, roomId, clientId }: Props) {
   const rollLock = useRef(false);
   const moveLock = useRef(false);
 
-  useRoomPresence(roomId, clientId);
-  const reporter = useOpsReporter(roomId, clientId);
+  useRoomPresence(roomId, clientId, !readOnly);
+  const reporter = useOpsReporter(roomId, clientId, !readOnly);
   const { connected } = useConnectionResync({
     roomId,
     clientId,
     eventSeq: data.room.eventSeq,
     reporter,
+    seated: !readOnly,
   });
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -278,7 +283,8 @@ export function GameScreen({ data, roomId, clientId }: Props) {
     el.scrollTop = el.scrollHeight;
   }, [eventCount]);
 
-  const { room, players, me } = data;
+  const { room, players } = data;
+  const me = readOnly ? null : data.me;
   const isTeamMode = room.mode === "2v2";
   const teamLabel = (team: "A" | "B" | null | undefined) =>
     team === "A" || team === "B" ? `Team ${team}` : null;
@@ -656,6 +662,10 @@ export function GameScreen({ data, roomId, clientId }: Props) {
   }
 
   async function onLeave() {
+    if (readOnly) {
+      router.push("/");
+      return;
+    }
     setBusy(true);
     try {
       await leaveRoom({ roomId, clientId });
@@ -737,25 +747,34 @@ export function GameScreen({ data, roomId, clientId }: Props) {
     <div className={styles.game}>
       {(offline || meDisconnected || !connected) && (
         <div className={styles.reconnect} role="status">
-          Reconnecting… Your seat is saved.
+          {readOnly ? "Reconnecting…" : "Reconnecting… Your seat is saved."}
         </div>
       )}
 
       <header className={styles.top}>
         <div className={styles.topText}>
           <div className={styles.topRow}>
-            <p className={styles.label}>Room {room.code}</p>
+            <p className={styles.label}>
+              Room {room.code}
+              {spectate && (
+                <span className={styles.spectatingBadge} role="status">
+                  Spectating · {spectate.count} watching
+                </span>
+              )}
+            </p>
             <div className={styles.topActions}>
-              <button
-                type="button"
-                className={styles.iconBtn}
-                onClick={() => void onTroubleshoot()}
-                disabled={troubleBusy || isTroubleshootCoolingDown()}
-                aria-busy={troubleBusy || undefined}
-                aria-label="Troubleshoot connection"
-              >
-                {troubleBusy ? "Fixing…" : "Troubleshoot"}
-              </button>
+              {!readOnly && (
+                <button
+                  type="button"
+                  className={styles.iconBtn}
+                  onClick={() => void onTroubleshoot()}
+                  disabled={troubleBusy || isTroubleshootCoolingDown()}
+                  aria-busy={troubleBusy || undefined}
+                  aria-label="Troubleshoot connection"
+                >
+                  {troubleBusy ? "Fixing…" : "Troubleshoot"}
+                </button>
+              )}
               <button
                 type="button"
                 className={styles.iconBtn}
@@ -764,15 +783,15 @@ export function GameScreen({ data, roomId, clientId }: Props) {
               >
                 {muted ? "Sound off" : "Sound on"}
               </button>
-              {room.status === "playing" && (
+              {(room.status === "playing" || readOnly) && (
                 <button
                   type="button"
                   className={styles.iconBtn}
                   disabled={busy}
                   onClick={onLeave}
-                  aria-label="Leave game"
+                  aria-label={readOnly ? "Stop watching" : "Leave game"}
                 >
-                  Leave
+                  {readOnly ? "Stop watching" : "Leave"}
                 </button>
               )}
             </div>
@@ -1040,8 +1059,15 @@ export function GameScreen({ data, roomId, clientId }: Props) {
                 );
               })}
             </ol>
+            {room.ranked && (
+              <RatingResultBanner roomId={roomId} myColor={(me?.color as Color | undefined) ?? null} />
+            )}
             <div className={styles.endActions}>
-              {me?.isHost ? (
+              {readOnly ? (
+                <p className={styles.waiting}>Match over.</p>
+              ) : room.ranked ? (
+                <p className={styles.waiting}>Ranked match over — find a new match from home.</p>
+              ) : me?.isHost ? (
                 <Button variant="ink" disabled={busy} onClick={onRematch}>
                   Play again
                 </Button>
@@ -1099,7 +1125,7 @@ export function GameScreen({ data, roomId, clientId }: Props) {
           <p className={styles.waiting}>Waiting for {turnLabel}…</p>
         )}
         <ErrorText
-          onTroubleshoot={() => void onTroubleshoot()}
+          onTroubleshoot={readOnly ? undefined : () => void onTroubleshoot()}
           troubleBusy={troubleBusy}
           troubleDisabled={isTroubleshootCoolingDown()}
         >

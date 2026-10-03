@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useMutation, useQuery } from "convex/react";
+import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { Button, ErrorText, StatusText } from "@/components/ui";
@@ -38,6 +38,7 @@ import {
   isTroubleshootCoolingDown,
   runTroubleshoot,
 } from "@/lib/troubleshoot";
+import { useAuthState } from "@/lib/auth";
 import styles from "./room.module.css";
 
 function isRoomId(value: string | undefined): value is Id<"rooms"> {
@@ -54,7 +55,9 @@ export function RoomClient({
 }) {
   const clientId = useSessionId();
   const [joinError, setJoinError] = useState<string | null>(null);
-  const [name, setName] = useState("");
+  const { profile } = useAuthState();
+  const [nameDraft, setName] = useState<string | null>(null);
+  const name = nameDraft ?? profile?.displayName ?? "";
   const pendingJoinName = usePendingJoinName();
   const [joining, setJoining] = useState(false);
   const [joinTeam, setJoinTeam] = useState<"A" | "B" | null>(null);
@@ -169,6 +172,25 @@ export function RoomClient({
     data?.room.mode,
   ]);
 
+  // Ranked seats belong to the account: a signed-in owner opening the room in
+  // a new tab takes the seat back without typing a name or asking a host.
+  const rankedRoom = !!data?.room.ranked;
+  const { isAuthenticated: signedIn } = useConvexAuth();
+  const rankedReclaimTried = useRef(false);
+  const displayName = profile?.displayName ?? "";
+  useEffect(() => {
+    if (!clientId || !rankedRoom || !signedIn || hasMe) return;
+    if (rankedReclaimTried.current) return;
+    rankedReclaimTried.current = true;
+    void Promise.resolve().then(() => {
+      setJoining(true);
+      setJoinError(null);
+      void joinRoom({ code: roomCode, clientId, name: displayName })
+        .catch((err) => setJoinError(formatConvexError(err, "Could not rejoin")))
+        .finally(() => setJoining(false));
+    });
+  }, [clientId, rankedRoom, signedIn, hasMe, joinRoom, roomCode, displayName]);
+
   async function onJoin(e: FormEvent) {
     e.preventDefault();
     if (!clientId || joining) return;
@@ -275,6 +297,20 @@ export function RoomClient({
   if (!hasMe) {
     if (joining) {
       return <StatusText>Joining room…</StatusText>;
+    }
+    if (rankedRoom) {
+      return (
+        <div className={styles.center}>
+          <h1>Ranked game {roomCode}</h1>
+          <p>
+            {signedIn
+              ? "Only the matched players can sit in this game."
+              : "This is a ranked game. Sign in with the account that was matched to rejoin."}
+          </p>
+          <ErrorText>{joinError}</ErrorText>
+          <Link href="/">Back home</Link>
+        </div>
+      );
     }
     const midGame = roomStatus === "playing" || roomStatus === "finished";
     const teamMode = data?.room.mode === "2v2" && roomStatus === "lobby";

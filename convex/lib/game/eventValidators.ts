@@ -181,19 +181,19 @@ export const teamFinishedEventValidator = eventVariant(
   }),
 );
 
+export const finishReasonValidator = v.union(
+  v.literal("all_home"),
+  v.literal("team_home"),
+  v.literal("team_eliminated"),
+  v.literal("sole_survivor"),
+  v.literal("automatic_loser"),
+  v.literal("all_ranked"),
+  v.literal("abandoned"),
+);
+
 export const gameFinishedEventValidator = eventVariant(
   "GAME_FINISHED",
-  v.object({
-    reason: v.union(
-      v.literal("all_home"),
-      v.literal("team_home"),
-      v.literal("team_eliminated"),
-      v.literal("sole_survivor"),
-      v.literal("automatic_loser"),
-      v.literal("all_ranked"),
-      v.literal("abandoned"),
-    ),
-  }),
+  v.object({ reason: finishReasonValidator }),
 );
 
 export const ludoEventValidator = v.union(
