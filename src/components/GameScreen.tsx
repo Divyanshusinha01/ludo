@@ -264,7 +264,8 @@ export function GameScreen({ data, roomId, clientId, spectate }: Props) {
     const diceValue = localDice ? localDice.value : data.room.diceValue;
     if (!rolled || diceValue === null) return [];
     if (data.room.status !== "playing") return [];
-    if (animating || optimisticTokens) return [];
+    // A choice made mid-spin would be overwritten when onRoll sets its dice.
+    if (rolling || animating || optimisticTokens) return [];
     const mePlayer = data.players.find((p) => p.isMe);
     if (mePlayer?.finishRank != null || mePlayer?.eliminated) return [];
     const mode = data.room.mode === "2v2" ? "2v2" : "1v1";
@@ -278,7 +279,7 @@ export function GameScreen({ data, roomId, clientId, spectate }: Props) {
       return legalMovesForDelegatedRoll(tokens, passedRollTo, diceValue);
     }
     return getLegalMovesForActor(tokens, moveColor, roster, mode, diceValue);
-  }, [data, animating, localDice, optimisticTokens, serverTokens]);
+  }, [data, rolling, animating, localDice, optimisticTokens, serverTokens]);
 
   const finishRanks = useMemo(() => {
     const ranks: Partial<Record<Color, number>> = {};
@@ -606,6 +607,7 @@ export function GameScreen({ data, roomId, clientId, spectate }: Props) {
     if (
       !connected ||
       animating ||
+      rollLock.current ||
       moveLock.current ||
       !myTurn ||
       !diceRolled ||
