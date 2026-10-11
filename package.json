@@ -65,7 +65,7 @@
     "convex-test": "^0.0.60",
     "eslint": "^9",
     "eslint-config-next": "16.4.0",
-    "jsdom": "^30.1.2",
+    "jsdom": "^30.1.1",
     "sharp": "^0.35.5",
     "tsx": "^4.23.15",
     "typescript": "^5",
