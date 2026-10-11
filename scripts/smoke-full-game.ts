@@ -1,3 +1,7 @@
+/**
+ * Live Convex smoke test: plays one full game against a running deployment.
+ * Requires NEXT_PUBLIC_CONVEX_URL (from .env.local via `npx convex dev`).
+ */
 import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { ConvexHttpClient } from "convex/browser";

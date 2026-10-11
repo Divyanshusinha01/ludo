@@ -1,12 +1,11 @@
 import { internalMutation, MutationCtx } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { Color } from "./lib/ludo";
-import { logEvent } from "./lib/log";
 import { ATTEMPT_ROW_TTL_MS } from "./lib/rateLimit";
 import { purgeQueueTickets } from "./lib/matchQueue";
 import { purgeStaleSpectators } from "./lib/spectate";
 import { commitCommand, loadGameState } from "./lib/gameStore";
-import { clearChatForRoom, clearVoiceForRoom, deleteRoomCascade } from "./lib/roomAuth";
+import { deleteRoomCascade } from "./lib/roomAuth";
 
 /** Mark away if no heartbeat within this window. */
 const STALE_MS = 45_000;

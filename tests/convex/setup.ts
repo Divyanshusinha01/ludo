@@ -21,7 +21,10 @@ import {
 } from "../../convex/lib/ludo";
 import { mulberry32, randomForFace } from "../game/fixtures/dice";
 
-export const modules = import.meta.glob("../../convex/**/!(*.*.*)*.*s");
+export const modules = import.meta.glob([
+  "../../convex/**/*.*s",
+  "!../../convex/**/*.*.*",
+]);
 
 /** Captured before vi.useFakeTimers so tests can still yield to the real event loop. */
 const realSetTimeout = globalThis.setTimeout;

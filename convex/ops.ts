@@ -256,6 +256,15 @@ async function pruneOps(ctx: MutationCtx, now: number): Promise<void> {
   }
 }
 
+/** Compares in time that depends only on the lengths, not on where they differ. */
+function timingSafeEqual(a: string, b: string): boolean {
+  let diff = a.length ^ b.length;
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+  }
+  return diff === 0;
+}
+
 const percentilesValidator = v.object({
   kind: metricKindValidator,
   count: v.number(),
@@ -322,7 +331,7 @@ export const dashboard = query({
   returns: dashboardValidator,
   handler: async (ctx, args) => {
     const expected = process.env.OPS_DASHBOARD_TOKEN;
-    if (!expected || args.token !== expected) fail(GameError.unauthorized);
+    if (!expected || !timingSafeEqual(args.token, expected)) fail(GameError.unauthorized);
 
     const windowEnd = minuteOf(args.nowMinute);
     const windowStart = windowEnd - (DASHBOARD_WINDOW_MINUTES - 1) * MINUTE_MS;
