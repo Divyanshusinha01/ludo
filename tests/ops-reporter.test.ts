@@ -4,6 +4,7 @@ import { MAX_LATENCY_MS } from "../convex/lib/metrics";
 import {
   classifyError,
   convexErrorMessage,
+  isRateLimitedError,
   isStaleError,
   OPS_BATCH_MAX,
   OPS_QUEUE_MAX,
@@ -40,6 +41,11 @@ describe("error classification", () => {
   it("detects stale rejections only", () => {
     expect(isStaleError(convexError(GameError.staleAction))).toBe(true);
     expect(isStaleError(convexError(GameError.turnExpired))).toBe(false);
+  });
+
+  it("detects rate-limited rejections only", () => {
+    expect(isRateLimitedError(convexError(GameError.rateLimited))).toBe(true);
+    expect(isRateLimitedError(convexError(GameError.staleAction))).toBe(false);
   });
 });
 

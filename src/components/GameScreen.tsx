@@ -22,7 +22,8 @@ import { useRoomPresence } from "@/hooks/useRoomPresence";
 import { useConnectionResync } from "@/hooks/useConnectionResync";
 import { useOpsReporter } from "@/hooks/useOpsReporter";
 import { useOpponentDiceRoll } from "@/hooks/useOpponentDiceRoll";
-import { classifyError, isStaleError } from "@/lib/opsReporter";
+import { classifyError, isRateLimitedError, isStaleError } from "@/lib/opsReporter";
+import { ACTION_MIN_INTERVAL_MS } from "../../convex/lib/session";
 import type { MetricKind } from "../../convex/lib/metrics";
 import {
   useTokenAnimation,
@@ -80,6 +81,17 @@ function tokenSig(tokens: AnimToken[]) {
 
 function sleep(ms: number) {
   return new Promise<void>((r) => setTimeout(r, ms));
+}
+
+/** A tap right after the previous action can land inside the server's per-seat gap; retry once past it. */
+async function retryIfRateLimited<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (e) {
+    if (!isRateLimitedError(e)) throw e;
+    await sleep(ACTION_MIN_INTERVAL_MS + 50);
+    return await call();
+  }
 }
 
 function useTurnCountdown(
@@ -502,12 +514,14 @@ export function GameScreen({ data, roomId, clientId, spectate }: Props) {
     const started = performance.now();
     let answered = false;
     try {
-      const result = await rollDice({
-        roomId,
-        clientId,
-        turnId: room.turnId,
-        expectedSeq: room.eventSeq,
-      });
+      const result = await retryIfRateLimited(() =>
+        rollDice({
+          roomId,
+          clientId,
+          turnId: room.turnId,
+          expectedSeq: room.eventSeq,
+        }),
+      );
       answered = true;
       reportOk("roll", started);
       // Keep a short spin even on fast networks; never stack extra delay
@@ -617,14 +631,16 @@ export function GameScreen({ data, roomId, clientId, spectate }: Props) {
 
     const started = performance.now();
     try {
-      const result = await moveToken({
-        roomId,
-        clientId,
-        tokenIndex,
-        ...(tokenColor !== me.color ? { tokenColor } : {}),
-        turnId: room.turnId,
-        expectedSeq: room.eventSeq,
-      });
+      const result = await retryIfRateLimited(() =>
+        moveToken({
+          roomId,
+          clientId,
+          tokenIndex,
+          ...(tokenColor !== me.color ? { tokenColor } : {}),
+          turnId: room.turnId,
+          expectedSeq: room.eventSeq,
+        }),
+      );
       reportOk("move", started);
       if (result.captured) {
         haptic("capture");

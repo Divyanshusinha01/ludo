@@ -43,6 +43,10 @@ export function isStaleError(err: unknown): boolean {
   return classifyError(err).code === "stale";
 }
 
+export function isRateLimitedError(err: unknown): boolean {
+  return classifyError(err).code === "rate_limited";
+}
+
 /**
  * Batches client-observed outcomes for `ops.reportClientEvents`. Sends are
  * serialized; a rate-limited (accepted: 0) or failed batch is requeued once
