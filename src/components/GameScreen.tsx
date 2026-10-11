@@ -22,7 +22,12 @@ import { useRoomPresence } from "@/hooks/useRoomPresence";
 import { useConnectionResync } from "@/hooks/useConnectionResync";
 import { useOpsReporter } from "@/hooks/useOpsReporter";
 import { useOpponentDiceRoll } from "@/hooks/useOpponentDiceRoll";
-import { classifyError, isStaleError } from "@/lib/opsReporter";
+import {
+  classifyError,
+  isRateLimitedError,
+  isStaleError,
+} from "@/lib/opsReporter";
+import { ACTION_MIN_INTERVAL_MS } from "../../convex/lib/session";
 import type { MetricKind } from "../../convex/lib/metrics";
 import {
   useTokenAnimation,
@@ -259,7 +264,8 @@ export function GameScreen({ data, roomId, clientId, spectate }: Props) {
     const diceValue = localDice ? localDice.value : data.room.diceValue;
     if (!rolled || diceValue === null) return [];
     if (data.room.status !== "playing") return [];
-    if (animating || optimisticTokens) return [];
+    // A choice made mid-spin would be overwritten when onRoll sets its dice.
+    if (rolling || animating || optimisticTokens) return [];
     const mePlayer = data.players.find((p) => p.isMe);
     if (mePlayer?.finishRank != null || mePlayer?.eliminated) return [];
     const mode = data.room.mode === "2v2" ? "2v2" : "1v1";
@@ -273,7 +279,7 @@ export function GameScreen({ data, roomId, clientId, spectate }: Props) {
       return legalMovesForDelegatedRoll(tokens, passedRollTo, diceValue);
     }
     return getLegalMovesForActor(tokens, moveColor, roster, mode, diceValue);
-  }, [data, animating, localDice, optimisticTokens, serverTokens]);
+  }, [data, rolling, animating, localDice, optimisticTokens, serverTokens]);
 
   const finishRanks = useMemo(() => {
     const ranks: Partial<Record<Color, number>> = {};
@@ -601,6 +607,7 @@ export function GameScreen({ data, roomId, clientId, spectate }: Props) {
     if (
       !connected ||
       animating ||
+      rollLock.current ||
       moveLock.current ||
       !myTurn ||
       !diceRolled ||
@@ -616,14 +623,21 @@ export function GameScreen({ data, roomId, clientId, spectate }: Props) {
     await applyOptimisticMove(tokenColor, tokenIndex, diceValue);
 
     const started = performance.now();
+    const args = {
+      roomId,
+      clientId,
+      tokenIndex,
+      ...(tokenColor !== me.color ? { tokenColor } : {}),
+      turnId: room.turnId,
+      expectedSeq: room.eventSeq,
+    };
     try {
-      const result = await moveToken({
-        roomId,
-        clientId,
-        tokenIndex,
-        ...(tokenColor !== me.color ? { tokenColor } : {}),
-        turnId: room.turnId,
-        expectedSeq: room.eventSeq,
+      // The server spaces roll and move by ACTION_MIN_INTERVAL_MS; a slow roll
+      // reply plus a quick tap can land inside that window.
+      const result = await moveToken(args).catch(async (e: unknown) => {
+        if (!isRateLimitedError(e)) throw e;
+        await sleep(ACTION_MIN_INTERVAL_MS);
+        return moveToken(args);
       });
       reportOk("move", started);
       if (result.captured) {
