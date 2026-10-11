@@ -24,17 +24,18 @@ No account is needed.
 
 ## Engineering highlights
 
-Each item below is implemented in the linked code, and the linked tests pass locally.
+Each item below is implemented in the linked code and covered by the linked tests. On 2026-10-11, `npm run test:coverage` passed all 726 tests in 61 files locally, with 84.68% line coverage of `convex/` and `src/lib/`. Every measured number, with its command, date and machine, is in [docs/quality.md](docs/quality.md).
 
 - **Event-sourced, server-authoritative game state.** Every roll, move, timeout and forfeit is a typed event appended to the `gameEvents` table by `commitEvents` in [`convex/lib/gameStore.ts`](convex/lib/gameStore.ts). The live room tables are a projection of that log.
 - **Deterministic replay.** The reducer in [`convex/lib/game/`](convex/lib/game) is pure: dice values are rolled once on the server and stored in the event, so replaying the log always produces the same state. [`internal.gameEvents.verifyReplay`](convex/gameEvents.ts) replays a room and diffs it against the live state. Tests: [`tests/game/replay/determinism.test.ts`](tests/game/replay/determinism.test.ts) (the reducer never reads `Math.random` or `Date.now`), [`tests/convex/live-vs-replay.test.ts`](tests/convex/live-vs-replay.test.ts) (live state equals replayed state after every action of full 1v1, 3-player, 4-player and 2v2 games), [`tests/game/replay/corrupted-history.test.ts`](tests/game/replay/corrupted-history.test.ts) and [`tests/convex/verify-replay.test.ts`](tests/convex/verify-replay.test.ts) (dropped, swapped, duplicated or truncated events are detected).
 - **Optimistic concurrency with `expectedSeq`.** Each gameplay mutation carries the room version the client saw. A mismatch, or a log tail that does not match the head, rejects the call and Convex rolls back every write. Double clicks, duplicate deliveries and two players acting at once land exactly once. Tests: [`tests/convex/concurrency/`](tests/convex/concurrency) (races, stale and duplicate calls, matchmaking races, reconnect storms) and [`tests/convex/versioning.test.ts`](tests/convex/versioning.test.ts).
 - **Idempotent ranked settlement.** `settleRankedRoom` in [`convex/lib/settlement.ts`](convex/lib/settlement.ts) runs inside the same transaction as the move that ends the game. A `ratingSettledAt` guard makes a second call a no-op, and abandoned games close without moving ratings. Tests: [`tests/convex/rating-settlement.test.ts`](tests/convex/rating-settlement.test.ts) (settles exactly once, duel, free-for-all, 2v2, abandoned games).
 - **Elo for duels, free-for-all and teams.** [`convex/lib/rating.ts`](convex/lib/rating.ts): K-factor 40 for the first 30 rated games, then 24. Free-for-all is pairwise Elo over final placements scaled by 1/(n-1); 2v2 uses team-average ratings. Matchmaking accepts opponents within +/-100 rating, widening by 50 every 10s up to +/-500. Tests: [`tests/rating.test.ts`](tests/rating.test.ts), [`tests/convex/matchmaking.test.ts`](tests/convex/matchmaking.test.ts).
-- **Reconnects without refreshing.** The client sends a heartbeat every 20s ([`src/hooks/useRoomPresence.ts`](src/hooks/useRoomPresence.ts)); the server ignores heartbeats sent less than 5s apart, and [`cleanup.tick`](convex/cleanup.ts) (every 30s) marks a seat away after 45s of silence. A client reconnecting with an old view is refused as stale and converges through its live subscription or `listEvents({ afterSeq })`. Server-side tests: [`tests/convex/reconnect-convergence.test.ts`](tests/convex/reconnect-convergence.test.ts), [`tests/convex/concurrency/reconnect-storm.test.ts`](tests/convex/concurrency/reconnect-storm.test.ts). The client-side "Board updated" auto-resync in `GameScreen` is checked manually, not by automated tests.
+- **Reconnects without refreshing.** The client sends a heartbeat every 20s ([`src/hooks/useRoomPresence.ts`](src/hooks/useRoomPresence.ts)); the server ignores heartbeats sent less than 5s apart, and [`cleanup.tick`](convex/cleanup.ts) (every 30s) marks a seat away after 45s of silence. A client reconnecting with an old view is refused as stale and converges through its live subscription or `listEvents({ afterSeq })`. Server-side tests: [`tests/convex/reconnect-convergence.test.ts`](tests/convex/reconnect-convergence.test.ts), [`tests/convex/concurrency/reconnect-storm.test.ts`](tests/convex/concurrency/reconnect-storm.test.ts). In the browser, [`e2e/reconnect.spec.ts`](e2e/reconnect.spec.ts) takes one player offline while the other plays, then checks that the dropped player catches up and acts again without a page reload. The "Board updated" banner itself is not asserted in a browser test.
 - **Room isolation.** Rooms played in parallel keep separate logs, and a player in one room cannot act in another. Test: [`tests/convex/room-isolation.test.ts`](tests/convex/room-isolation.test.ts).
-- **Load testing.** k6 scripts in [`load/k6/`](load/k6) drive the real Convex functions for gameplay and reconnect storms, and [`load/verify-replay.mjs`](load/verify-replay.mjs) runs `verifyReplay` on sampled rooms afterwards. Measured results, including latency limits seen on a single-laptop local backend, are in [docs/operations.md](docs/operations.md#measured-results).
-- **CI.** [GitHub Actions](.github/workflows/ci.yml) runs lint, the Vitest suites, type checks and a production build on every push and pull request.
+- **Browser E2E and accessibility.** Six Playwright specs in [`e2e/`](e2e) run against a production build and a local Convex backend: a bot game, two players in sync, reconnect, offline pass-and-play after the service worker installs, keyboard-only play, and an axe scan of five screens with no serious or critical WCAG A/AA violations. The suite passed 3 full runs in a row with retries off.
+- **Load testing.** k6 scripts in [`load/k6/`](load/k6) drive the real Convex functions for gameplay and reconnect storms, and [`load/verify-replay.mjs`](load/verify-replay.mjs) runs `verifyReplay` on sampled rooms afterwards. On a single-laptop local backend, 5 rooms met the latency thresholds (p95 < 500ms, p99 < 1000ms). From 25 rooms up, latency failed, and from 50 rooms up, errors (HTTP 429/503) did too. Reconnect success stayed at or above 99.49% up to 100 rooms, and 59 of 59 checked rooms replayed with no diffs. Cloud Convex has not been load tested. Details: [docs/operations.md](docs/operations.md#measured-results).
+- **CI.** [GitHub Actions](.github/workflows/ci.yml) runs lint, type checks for the app and `convex/`, and a production build. A second job runs the Vitest suites with coverage floors and uploads the report. A third job runs the Playwright specs against a throwaway local Convex backend.
 
 ## Architecture
 
@@ -99,7 +100,7 @@ Ranked: sign in, open **Play Multiplayer**, pick a queue and tap **Find match**.
 - React + CSS/SVG board, React Three Fiber for dice and tokens
 - Convex (authoritative game state + realtime)
 - Vercel for hosting
-- Vitest (unit, Convex and UI projects), k6 for load tests
+- Vitest (unit, Convex and UI projects), Playwright with axe for browser tests, k6 for load tests
 
 ## Local development
 
@@ -123,6 +124,8 @@ Debug replay UI: `/debug/replay/[CODE]` in development, or set `NEXT_PUBLIC_ENAB
 - `npm test` / `npm run test:logic` - all Vitest projects (unit, Convex, UI)
 - `npm run test:unit` / `test:convex` / `test:concurrency` / `test:ui` - one project or folder
 - `npm run test:watch` - Vitest watch mode
+- `npm run test:coverage` - all Vitest projects with v8 coverage (fails under the floors in `vitest.config.ts`)
+- `npm run test:e2e` - Playwright specs (builds into `.next-e2e`, reuses or starts `npx convex dev`, and refuses a non-local Convex URL)
 - `npm run typecheck` - TypeScript for the app and `convex/`
 - `npm run test:integration` - live Convex smoke (needs `.env.local`)
 - `npm run test:full-game` - plays a full game against the live backend
@@ -137,6 +140,8 @@ Accounts: run `node scripts/generate-auth-keys.mjs` and set the printed `AUTH_JW
 ## Operations
 
 [docs/operations.md](docs/operations.md) covers the version and reconnect model, metrics and the `/ops` dashboard, k6 load tests with measured results, and troubleshooting.
+
+[docs/quality.md](docs/quality.md) is the quality scorecard: test count, coverage, E2E, bot strength, load, replay and Lighthouse results, each with its command and date.
 
 [docs/multiplayer.md](docs/multiplayer.md) covers accounts and sessions, the ranked queue lifecycle, the rating formula, settlement idempotency, match history, spectators, and deploying the (additive, no-backfill) schema.
 

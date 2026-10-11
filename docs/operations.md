@@ -197,6 +197,61 @@ Pass settings with `-e`, for example
 
 ### Measured results
 
+#### 2026-10-11 step-up (5, 25, 50, 100 rooms)
+
+Machine: Intel Core i5-13500H (12 cores, 16 threads), 15.7 GB RAM, Windows 11
+Home, Node 24.19.0, k6 v2.2.0. Backend: a fresh anonymous local Convex
+deployment (`CONVEX_AGENT_MODE=anonymous npx convex dev`, convex 1.46.0) in a
+separate copy of the project, so its database started empty. Everything ran on
+the same laptop. Settings as before: 4 players per room, 2 minutes,
+`THINK_MS=250`, `HEARTBEAT_MS=15000`, `MAX_ACTIONS=600`, client metrics on,
+default thresholds. The eight runs went in the order shown, on the same backend,
+with 60s between runs, so later steps also carried the rooms left by earlier
+ones.
+
+```bash
+k6 run -e ROOMS=<n> load/k6/gameplay.js    # then reconnect.js, n = 5, 25, 50, 100
+```
+
+| Script | Rooms | Mutations/s | Mutation p50 / p95 / p99 (ms) | Query p95 (ms) | Errors | Stale rejections | Reconnect success | Thresholds |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| gameplay | 5 | 11.57 | 99 / 384 / 462 | 193 | 0.00% (0/3074) | 0 | n/a | Pass |
+| reconnect | 5 | 17.17 | 37 / 119 / 257 | 78 | 0.00% (0/3614) | 480 | 100% (480/480) | Pass |
+| gameplay | 25 | 22.90 | 575 / 1460 / 2477 | 761 | 0.06% (3/4890) | 0 | n/a | Fail (latency) |
+| reconnect | 25 | 11.45 | 1165 / 4668 / 11519 | 1790 | 0.00% (0/2457) | 283 | 100% (272/272) | Fail (latency) |
+| gameplay | 50 | 18.13 | 2157 / 5088 / 8269 | 2262 | 0.00% (0/2861) | 0 | n/a | Fail (latency) |
+| reconnect | 50 | 21.74 | 1153 / 5864 / 8193 | 2534 | 1.15% (54/4704) | 519 | 99.77% (439/440) | Fail (latency, errors) |
+| gameplay | 100 | 11.91 | 6646 / 13232 / 16933 | 6351 | 52.32% (813/1554) | 0 | n/a | Fail (latency, errors) |
+| reconnect | 100 | 26.70 | 1642 / 10042 / 13929 | 772 | 11.00% (580/5273) | 462 | 99.49% (390/392) | Fail (latency, errors) |
+
+- 5 rooms passed every threshold this time, where the 2026-10-03 run failed on
+  latency. That earlier backend had a database full of earlier runs; this
+  one started empty. The two runs are not a controlled comparison.
+- From 25 rooms up, latency fails. From 50 rooms up, the error threshold fails
+  too. Throughput stops growing past 25 rooms (about 12 to 27 mutations/s), so
+  this laptop backend is saturated by then.
+- The errors are transport failures, not game rejections. The step-up log did
+  not keep k6's per-call warnings, so a separate 60s, 100-room gameplay run
+  (`-e DURATION=60s`) was used to classify them: 44 HTTP 429 responses
+  (38 of them `rooms:heartbeat`), 5 dropped `rooms:getRoom` requests (HTTP 0),
+  and 1 HTTP 503.
+- Reconnect correctness mostly held: 3 of about 1,000 outdated-view rolls at 50
+  and 100 rooms did not come back as `stale`, and the response was not
+  captured. Every resync reached the head.
+- `verifyReplay` found no diffs. 39 of 40 rooms sampled from the newest 1,000
+  passed (`POOL=1000 npm run load:verify 40`), and the 40th had been deleted by
+  `cleanup.tick` between listing and checking ("room missing"). All 20 of 20
+  rooms sampled from the oldest 300 passed (`ORDER=asc POOL=300`), with heads up
+  to 242, in lobby, playing and finished states. One earlier attempt hit the 1s
+  function limit on a room that then passed three times in a row on retry.
+- Cloud Convex: still not measured.
+
+Run `load:verify` from the directory whose `.env.local` points at the backend
+under test. With `CONVEX_AGENT_MODE=anonymous` it uses that local deployment
+instead of `--deployment local`.
+
+#### 2026-10-03
+
 Measured on 2026-10-03. Machine: Intel Core i5-13500H (12 cores, 16 threads),
 15.7 GB RAM, Windows 11 Home. The local Convex backend, k6 v2.2.0 and the
 editor all ran on the same laptop. All runs used 4 players per room, 2 minutes,
@@ -210,8 +265,9 @@ the default thresholds.
 | gameplay | 25 | 11.46 | 1136 / 4713 / 6815 | 3460 | 0.25% (5/1981) | 0 | n/a | Fail (latency) |
 | reconnect | 25 | 24.47 | 473 / 2109 / 3238 | 1163 | 0.00% (0/5475) | 686 | 100% (660/660) | Fail (latency) |
 
-- 50 and 100 rooms: not measured. The step-up stopped at 25 because the latency
-  thresholds already failed at 5 rooms.
+- 50 and 100 rooms were not measured in this run; see the 2026-10-11 step-up.
+  This step-up stopped at 25 because the latency thresholds already failed at
+  5 rooms.
 - The error and reconnect thresholds passed in every run. The few errors were
   HTTP 503s and "Function execution timed out (maximum duration: 1s)" from the
   backend, not game rejections.

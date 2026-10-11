@@ -86,12 +86,19 @@ describe("secret hygiene", () => {
       clientId: clientId(2),
       name: "Guest",
     });
+    const seats = await t.run(async (ctx) =>
+      (await ctx.db.query("players").collect()).filter((p) => p.roomId === created.roomId),
+    );
+    const aliceSeat = seats.find((p) => p.accountId)!;
+    const guestSeat = seats.find((p) => !p.accountId)!;
 
     const results: Record<string, unknown> = {
       me: await user.query(api.auth.me, {}),
       meAnon: await t.query(api.auth.me, {}),
       getMine: await user.query(api.profiles.getMine, {}),
       getPublic: await t.query(api.profiles.getPublic, { username: "alice" }),
+      getForPlayer: await t.query(api.profiles.getForPlayer, { playerId: aliceSeat._id }),
+      getForPlayerGuest: await t.query(api.profiles.getForPlayer, { playerId: guestSeat._id }),
       updateDisplayName: await user.mutation(api.auth.updateDisplayName, { displayName: "Al" }),
       createRoom: created,
       joinRoom: joined,
@@ -111,6 +118,8 @@ describe("secret hygiene", () => {
       leaveSpectate: await t.mutation(api.spectate.leaveSpectate, { roomId: created.roomId, spectatorId: clientId(4) }),
     };
     expect(results.me).not.toBeNull();
+    expect(results.getForPlayer).toMatchObject({ username: "alice" });
+    expect(results.getForPlayerGuest).toBeNull();
 
     const secrets = await t.run(async (ctx) => {
       const accounts = await ctx.db.query("accounts").collect();
@@ -142,6 +151,6 @@ describe("secret hygiene", () => {
   });
 
   it("profiles module exposes only whitelisted fields", () => {
-    expect(Object.keys(profilesModule).sort()).toEqual(["getMine", "getPublic"]);
+    expect(Object.keys(profilesModule).sort()).toEqual(["getForPlayer", "getMine", "getPublic"]);
   });
 });

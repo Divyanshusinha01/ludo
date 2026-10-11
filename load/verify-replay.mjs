@@ -3,20 +3,31 @@
 // Usage: node load/verify-replay.mjs [sampleSize]
 // Env: DEPLOYMENT (default local), POOL = rooms to sample from (default 200),
 // ORDER = desc (newest, default) | asc (oldest).
+// With CONVEX_AGENT_MODE=anonymous and no DEPLOYMENT, the CLI's own local
+// deployment is used (it rejects `--deployment local` in that mode).
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const sample = Number(process.argv[2] ?? process.env.SAMPLE ?? 20);
-const deployment = process.env.DEPLOYMENT ?? "local";
+const anonymous = process.env.CONVEX_AGENT_MODE === "anonymous";
+const deployment = process.env.DEPLOYMENT ?? (anonymous ? null : "local");
+const deploymentArgs = deployment ? ["--deployment", deployment] : [];
 // Run the CLI through node directly: a Windows shell would strip JSON quotes.
 const cli = fileURLToPath(new URL("../node_modules/convex/bin/main.js", import.meta.url));
 
 function convex(args) {
-  return execFileSync(process.execPath, [cli, ...args, "--deployment", deployment], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    maxBuffer: 64 * 1024 * 1024,
-  });
+  try {
+    return execFileSync(process.execPath, [cli, ...args, ...deploymentArgs], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 64 * 1024 * 1024,
+    });
+  } catch (err) {
+    // Node 24 on Windows can abort the CLI during exit, after it has printed
+    // its full result (libuv assertion). Any other failure is real.
+    if (/UV_HANDLE_CLOSING/.test(String(err.stderr)) && err.stdout) return err.stdout;
+    throw err;
+  }
 }
 
 const pool = Number(process.env.POOL ?? 200);
