@@ -15,6 +15,8 @@
     "test:concurrency": "vitest run --project convex tests/convex/concurrency",
     "test:ui": "vitest run --project ui",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit && tsc --noEmit -p convex",
     "test:integration": "npx tsx scripts/test-integration.ts",
     "test:full-game": "npx tsx scripts/test-full-game.ts",
@@ -35,7 +37,9 @@
     "three": "^0.186.1"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@edge-runtime/vm": "^5.0.0",
+    "@playwright/test": "^1.64.0",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
@@ -43,6 +47,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/three": "^0.186.0",
+    "@vitest/coverage-v8": "^3.2.7",
     "convex-test": "^0.0.60",
     "eslint": "^9",
     "eslint-config-next": "16.3.6",

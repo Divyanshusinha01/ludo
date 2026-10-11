@@ -9,12 +9,23 @@ import {
 } from "@/lib/boardAsset";
 import { CELL, tokenStackKey, tokenSvgPosition } from "@/lib/boardGeometry";
 import { useCanUse3DBoard } from "@/hooks/useCanUse3D";
-import { COLOR_HEX, type Color } from "@/lib/player";
+import { disableWebGL3D } from "@/lib/webgl3dState";
+import { COLOR_HEX, COLOR_LABEL, type Color } from "@/lib/player";
 import { rankHouseLabel } from "../../convex/lib/ludo";
 import styles from "./Board.module.css";
 
 const TokenLayer3D = dynamic(
-  () => import("./TokenLayer3D").then((m) => m.TokenLayer3D),
+  () =>
+    import("./TokenLayer3D")
+      .then((m) => m.TokenLayer3D)
+      .catch(() => {
+        // The service worker only precaches chunks named in page HTML, so this
+        // lazy chunk can be missing offline; fall back to the SVG tokens.
+        disableWebGL3D();
+        return function NoTokenLayer3D() {
+          return null;
+        };
+      }),
   { ssr: false },
 );
 
@@ -469,7 +480,7 @@ export function Board({
               transform={`translate(${pos.x}, ${pos.y})`}
               // Hit testing is geometric on the SVG; tokens are visual only.
               style={{ pointerEvents: "none" }}
-              aria-hidden={!canSelect}
+              aria-hidden
             >
               <g
                 className={`${canSelect ? styles.selectable : ""} ${isActiveTurn && !canSelect ? styles.turnGlow : ""}`}
@@ -542,6 +553,44 @@ export function Board({
             </g>
           );
         })}
+
+        {/* Keyboard and screen-reader targets; pointer input keeps the geometric hit test. */}
+        {interactive &&
+          onSelectToken &&
+          tokens
+            .filter((t) =>
+              tokenIsSelectable(
+                t.color,
+                t.index,
+                selectable,
+                selectableTokens,
+                myColor,
+              ),
+            )
+            .map((t) => {
+              const pos =
+                positions.get(`${t.color}-${t.index}`) ??
+                tokenSvgPosition(t.color, t.index, t.steps);
+              return (
+                <circle
+                  key={`focus-${t.color}-${t.index}`}
+                  cx={pos.x}
+                  cy={pos.y}
+                  r={34}
+                  fill="transparent"
+                  pointerEvents="none"
+                  className={styles.tokenFocus}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Move ${COLOR_LABEL[t.color]} token ${t.index + 1}`}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter" && e.key !== " ") return;
+                    e.preventDefault();
+                    onSelectToken(t.color, t.index);
+                  }}
+                />
+              );
+            })}
       </svg>
       {use3D && (
         <div className={styles.layer3d} aria-hidden>

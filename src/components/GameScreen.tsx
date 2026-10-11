@@ -124,6 +124,8 @@ export function GameScreen({ data, roomId, clientId, spectate }: Props) {
   const [optimisticTokens, setOptimisticTokens] = useState<AnimToken[] | null>(
     null,
   );
+  /** Room head the optimistic tokens were predicted from. */
+  const optimisticSeq = useRef<number | null>(null);
   const lastTurnId = useRef<number | null>(null);
   const winPlayed = useRef(false);
   const [winBurstKey, setWinBurstKey] = useState(0);
@@ -198,16 +200,19 @@ export function GameScreen({ data, roomId, clientId, spectate }: Props) {
   ]);
 
   // Drop optimistic tokens once server matches (or rematch resets length).
+  // A newer head also drops them: one subscription update can carry our move
+  // and the next player's, so the predicted board is never seen on its own.
   useEffect(() => {
     if (!optimisticTokens) return;
     if (
       serverTokens.length !== optimisticTokens.length ||
-      tokenSig(serverTokens) === tokenSig(optimisticTokens)
+      tokenSig(serverTokens) === tokenSig(optimisticTokens) ||
+      data.room.eventSeq !== optimisticSeq.current
     ) {
       const id = setTimeout(() => setOptimisticTokens(null), 0);
       return () => clearTimeout(id);
     }
-  }, [serverTokens, optimisticTokens]);
+  }, [serverTokens, optimisticTokens, data.room.eventSeq]);
 
   const animTokens = optimisticTokens ?? serverTokens;
   const { displayTokens, animating, fx } = useTokenAnimation(animTokens);
@@ -476,6 +481,7 @@ export function GameScreen({ data, roomId, clientId, spectate }: Props) {
         }
         return t;
       });
+      optimisticSeq.current = room.eventSeq;
       setOptimisticTokens(next);
       setLocalDice({
         value: dice,

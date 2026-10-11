@@ -56,9 +56,12 @@ function runSeed(config: Config, seed: number) {
 describe.each(CONFIGS)("seeded random games: $label", (config) => {
   const seeds = Array.from({ length: SEEDS_PER_CONFIG }, (_, i) => BASE_SEED + i);
 
-  it(`${SEEDS_PER_CONFIG} games: invariants after every event, replay equals step-by-step build-up`, () => {
+  it(`${SEEDS_PER_CONFIG} games: invariants after every event, replay equals step-by-step build-up`, async () => {
     let events = 0;
     for (const seed of seeds) {
+      // The whole file is synchronous CPU work: without a macrotask turn the
+      // vitest worker cannot read its RPC replies and times out after 60s.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
       try {
         events += runSeed(config, seed).events.length;
       } catch (e) {
