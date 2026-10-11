@@ -36,6 +36,7 @@ export const reportTrouble = mutation({
     const lastError = args.lastError?.trim().slice(0, 200) || undefined;
     const userAgent = args.userAgent?.trim().slice(0, 120) || undefined;
     const code = args.code?.trim().toUpperCase().slice(0, 6) || undefined;
+    const roomStatus = args.roomStatus?.trim().slice(0, 20) || undefined;
 
     if (args.roomId) {
       const player = await requirePlayer(ctx, args.roomId, clientId);
@@ -54,7 +55,7 @@ export const reportTrouble = mutation({
       roomId: args.roomId ? String(args.roomId) : null,
       code: code ?? null,
       lastError: lastError ?? null,
-      roomStatus: args.roomStatus ?? null,
+      roomStatus: roomStatus ?? null,
       turnId: args.turnId ?? null,
       diceRolled: args.diceRolled ?? null,
       diceValue: args.diceValue ?? null,

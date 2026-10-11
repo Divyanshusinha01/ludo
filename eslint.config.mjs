@@ -6,6 +6,19 @@ const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
   {
+    rules: {
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+          destructuredArrayIgnorePattern: "^_",
+          ignoreRestSiblings: true,
+        },
+      ],
+    },
+  },
+  {
     // TODO: refactor the flagged effects/animation refs, then restore to "error".
     files: ["src/**/*.{ts,tsx}"],
     rules: {
@@ -57,6 +70,7 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    "coverage/**",
     // Convex codegen — not hand-edited
     "convex/_generated/**",
   ]),

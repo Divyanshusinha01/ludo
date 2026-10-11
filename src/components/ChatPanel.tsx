@@ -4,6 +4,7 @@ import {
   FormEvent,
   KeyboardEvent,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -125,6 +126,7 @@ export function ChatPanel({ roomId, clientId, players }: Props) {
   const [flash, setFlash] = useState<ChatFlash | null>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const mentionMenuId = useId();
   const lastNotifiedId = useRef<string | null>(null);
   const primedRef = useRef(false);
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -463,12 +465,17 @@ export function ChatPanel({ roomId, clientId, players }: Props) {
             <div className={styles.inputWrap}>
               {showMentionMenu && (
                 <ul
+                  id={mentionMenuId}
                   className={styles.mentionMenu}
                   role="listbox"
                   aria-label="Message privately"
                 >
                   {filteredMentions.map((p, i) => (
-                    <li key={`${p.color}-${p.name}`} role="option">
+                    <li
+                      key={`${p.color}-${p.name}`}
+                      role="option"
+                      aria-selected={i === mentionIndex}
+                    >
                       <button
                         type="button"
                         className={`${styles.mentionOption} ${
@@ -512,9 +519,11 @@ export function ChatPanel({ roomId, clientId, players }: Props) {
                 autoComplete="off"
                 enterKeyHint="send"
                 disabled={sending}
+                role="combobox"
                 aria-label="Chat message"
                 aria-autocomplete="list"
                 aria-expanded={showMentionMenu}
+                aria-controls={mentionMenuId}
               />
             </div>
             <button

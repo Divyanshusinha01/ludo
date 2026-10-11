@@ -11,9 +11,9 @@ Machine for every local run: Intel Core i5-13500H (12 cores, 16 threads),
 
 | Measure | Result | Command |
 | --- | --- | --- |
-| Vitest | 726 of 726 tests pass, 61 files | `npm run test:coverage` |
-| Line / branch / function coverage | 84.68% / 85.47% / 89.42% | `npm run test:coverage` |
-| Playwright E2E | 7 tests in 6 specs, 3 full runs in a row with no failures (retries off) | `npx playwright test` |
+| Vitest | 730 of 730 tests pass, 62 files | `npm run test:coverage` |
+| Line / branch / function coverage | 82.52% / 73.49% / 85.39% (Vitest 4) | `npm run test:coverage` |
+| Playwright E2E | 8 tests in 7 specs; see the CI run for the current result | `npx playwright test` |
 | axe (WCAG A/AA) | 0 serious or critical violations on 5 screens | `e2e/a11y.spec.ts` |
 | Bot vs random-legal player | 171 of 200 1v1 games won (85.5%) | `tests/game/bot/bot-strength.test.ts` |
 | k6 latency thresholds (p95 < 500ms, p99 < 1000ms) | Pass at 5 rooms, fail from 25 rooms up (local laptop backend) | `load/k6/gameplay.js`, `reconnect.js` |
@@ -24,22 +24,25 @@ Machine for every local run: Intel Core i5-13500H (12 cores, 16 threads),
 
 ## Tests and coverage
 
-Command: `npm run test:coverage` (Vitest 3, `@vitest/coverage-v8`), all three
-projects (unit, convex via `convex-test`, ui). Exit 0 in 287s.
+Command: `npm run test:coverage` (Vitest 4.1, `@vitest/coverage-v8`), all three
+projects (unit, convex via `convex-test`, ui). Exit 0 in 292s.
 
 | Metric | Covered | Total | % | CI floor |
 | --- | --- | --- | --- | --- |
-| Statements | 8683 | 10253 | 84.68 | 82 |
-| Branches | 2354 | 2754 | 85.47 | 83.5 |
-| Functions | 406 | 454 | 89.42 | 87 |
-| Lines | 8683 | 10253 | 84.68 | 82 |
+| Statements | 3764 | 4739 | 79.42 | 77.5 |
+| Branches | 2213 | 3011 | 73.49 | 71 |
+| Functions | 807 | 945 | 85.39 | 83.5 |
+| Lines | 3354 | 4064 | 82.52 | 80.5 |
 
 - Scope: `convex/lib/**`, `convex/*.ts` and `src/lib/**`, excluding
   `convex/_generated`. React components are tested by the `ui` project but are
   not in the coverage total.
-- The CI floors in `vitest.config.ts` sit about 1.5 points under the first
-  measured baseline (lines 83.63, branches 85.05, functions 88.76). They only
-  ever go up.
+- Vitest 4 maps v8 coverage through the AST, which counts statements and
+  branches differently from Vitest 3. On the same code it reported lines 82.16,
+  statements 79.10, branches 72.57 and functions 85.18, against 84.68 / 84.68 /
+  85.47 / 89.42 under Vitest 3. The drop is in the measurement, not the tests.
+- The CI floors in `vitest.config.mts` sit about 1.5 points under that Vitest 4
+  baseline. They only ever go up.
 
 ## Browser E2E (Playwright)
 
@@ -54,8 +57,9 @@ Command: `npx playwright test` (`npm run test:e2e`), Chromium, against
 | `pwa-offline.spec.ts` | After the service worker installs, `/offline` loads with the network cut and a pass-and-play game starts and rolls |
 | `keyboard.spec.ts` | Start, roll and move a token with Tab and Enter only, with a visible focus ring |
 | `a11y.spec.ts` | axe finds no serious or critical WCAG A/AA violations on home, offline setup, offline game, online lobby and online game |
+| `security-headers.spec.ts` | The home page carries the security headers, and home plus an offline game report no Content Security Policy violations |
 
-- Result: 7 of 7 tests passed in each of 3 consecutive full runs, each from a
+- Result before `security-headers.spec.ts` was added: 7 of 7 tests passed in each of 3 consecutive full runs, each from a
   fresh build. Earlier attempts were flaky and found three app bugs (no
   keyboard play, an offline crash when the 3D chunk was not cached, and a stuck
   die); those were fixed before the 3 clean runs.
@@ -76,16 +80,19 @@ against people.
 
 ## CI
 
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) has three jobs: lint,
-typecheck and build; tests with coverage (uploads the `coverage/` report); and
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) has four jobs:
+production dependency audit, lint, typecheck and build; a gitleaks secret scan
+over the full history; tests with coverage (uploads the `coverage/` report); and
 Playwright E2E on an anonymous local Convex backend (uploads the trace and
-report on failure).
+report on failure). The README badge shows the current status of `main`.
 
-As of 2026-10-11 the newest run on `main` failed on
-`tests/convex/auth-secrets.test.ts` (the `getForPlayer` whitelist). That test
-is fixed in the working tree and passes locally, but the fix, the coverage job
-and the E2E job have not run on GitHub yet. The README badge shows the real
-status of `main`.
+### Dependency audit (2026-10-11)
+
+`npm audit --omit=dev` reports 0 vulnerabilities. The full `npm audit` reports
+5 high findings, all one chain: `braces` (stack exhaustion on deeply nested
+glob patterns) via `micromatch` and `fast-glob` inside `eslint-config-next`.
+No fixed `braces` release exists yet, and the chain only runs at lint time on
+this repo's own files, so it is accepted until upstream ships a fix.
 
 ## Load and replay
 

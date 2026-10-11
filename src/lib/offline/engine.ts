@@ -91,14 +91,6 @@ function restoreTokenSnapshot(
   return next;
 }
 
-function appendEvents(
-  state: OfflineGameState,
-  texts: string[],
-  now: number,
-): Pick<OfflineGameState, "lastEvent" | "events"> {
-  return withEvents(state, texts, now);
-}
-
 function beginTurn(
   state: OfflineGameState,
   next: Color,

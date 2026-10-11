@@ -1,7 +1,6 @@
 import { mutation, query, MutationCtx, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
-import { internal } from "./_generated/api";
 import {
   COLORS,
   Color,
@@ -12,7 +11,7 @@ import {
   TURN_TIMEOUT_MS,
   Team,
 } from "./lib/ludo";
-import { BOT_THINK_MS, botClientId, botDisplayName } from "./lib/bot";
+import { botClientId, botDisplayName } from "./lib/bot";
 import { GameError, fail } from "./lib/errors";
 import { logEvent, withOutcomeLogging } from "./lib/log";
 import { recordSample } from "./lib/metrics";
@@ -27,7 +26,6 @@ import {
 } from "./lib/session";
 import { colorValidator } from "./schema";
 import { optionalAccount } from "./lib/auth";
-import { freshEvents, withEvent, withEvents } from "./lib/events";
 import {
   clearChatForRoom,
   clearVoiceForColor,

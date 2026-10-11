@@ -1,8 +1,8 @@
 import { defineConfig } from "vitest/config";
-import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const alias = {
-  "@": path.resolve(__dirname, "./src"),
+  "@": fileURLToPath(new URL("./src", import.meta.url)),
 };
 
 export default defineConfig({
@@ -16,13 +16,14 @@ export default defineConfig({
       reportsDirectory: "coverage",
       include: ["convex/lib/**/*.ts", "convex/*.ts", "src/lib/**/*.ts"],
       exclude: ["convex/_generated/**", "**/*.d.ts"],
-      // Ratchet floors ~1.5 points under the measured baseline (2026-10-11:
-      // lines/statements 83.63, branches 85.05, functions 88.76). Raise, never lower.
+      // Ratchet floors ~1.5 points under the measured baseline (2026-10-11,
+      // Vitest 4 AST-based v8 remapping: lines 82.16, statements 79.10,
+      // branches 72.57, functions 85.18). Raise, never lower.
       thresholds: {
-        lines: 82,
-        statements: 82,
-        branches: 83.5,
-        functions: 87,
+        lines: 80.5,
+        statements: 77.5,
+        branches: 71,
+        functions: 83.5,
       },
     },
     projects: [
@@ -47,7 +48,6 @@ export default defineConfig({
       },
       {
         resolve: { alias },
-        esbuild: { jsx: "automatic" },
         test: {
           name: "ui",
           environment: "jsdom",

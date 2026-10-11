@@ -1,5 +1,5 @@
 /**
- * Live Convex integration / security suite.
+ * Live Convex smoke test: integration and security checks against a running deployment.
  * Requires NEXT_PUBLIC_CONVEX_URL (from .env.local via `npx convex dev`).
  */
 import { readFileSync } from "node:fs";
