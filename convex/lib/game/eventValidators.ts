@@ -166,6 +166,14 @@ export const playerEliminatedEventValidator = eventVariant(
   }),
 );
 
+/** A seat that forfeited by leaving returns with host approval; its tokens restart in the yard. */
+export const playerReinstatedEventValidator = eventVariant(
+  "PLAYER_REINSTATED",
+  v.object({
+    color: colorValidator,
+  }),
+);
+
 export const playerFinishedEventValidator = eventVariant(
   "PLAYER_FINISHED",
   v.object({
@@ -210,6 +218,7 @@ export const ludoEventValidator = v.union(
   turnEndedEventValidator,
   turnTimedOutEventValidator,
   playerEliminatedEventValidator,
+  playerReinstatedEventValidator,
   playerFinishedEventValidator,
   teamFinishedEventValidator,
   gameFinishedEventValidator,

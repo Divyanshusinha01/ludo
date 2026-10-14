@@ -8,6 +8,7 @@ import {
   getLegalMovesForActor,
   hasWon,
   legalMovesForDelegatedRoll,
+  MAX_TIMEOUT_LIVES,
   moveControllerColor,
   nextColorAmong,
   nextTurnSeatColor,
@@ -554,6 +555,32 @@ export function reduce(state: GameState, event: LudoEvent): ReduceResult {
         };
       }
       return { ok: true, state: next };
+    }
+    case "PLAYER_REINSTATED": {
+      const playingCheck = assertPlaying(state);
+      if (playingCheck) return playingCheck;
+      const { color } = event.payload;
+      const seat = seatByColor(state, color);
+      if (!seat) return reject("no_seat", "Unknown seat");
+      if (!seat.eliminated) {
+        return reject("invalid_reinstate", "Seat is still playing");
+      }
+      const next = updateSeat(state, color, {
+        eliminated: false,
+        lives: MAX_TIMEOUT_LIVES,
+        finishRank: null,
+      });
+      return {
+        ok: true,
+        state: {
+          ...next,
+          rankings: next.rankings.filter((c) => c !== color),
+          tokens: [
+            ...next.tokens.filter((t) => t.color !== color),
+            ...tokensForColors([color]),
+          ],
+        },
+      };
     }
     case "TEAM_FINISHED": {
       const playingCheck = assertPlaying(state);

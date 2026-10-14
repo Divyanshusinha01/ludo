@@ -1,3 +1,5 @@
+import { ConvexError } from "convex/values";
+
 /** User-facing game errors — keep messages short and non-internal. */
 export const GameError = {
   missingSession: "Missing session",
@@ -52,6 +54,7 @@ export const GameError = {
 
 export type GameErrorMessage = (typeof GameError)[keyof typeof GameError];
 
+/** Production deployments redact plain `Error` messages; `ConvexError` data reaches the client. */
 export function fail(message: GameErrorMessage): never {
-  throw new Error(message);
+  throw new ConvexError(message);
 }

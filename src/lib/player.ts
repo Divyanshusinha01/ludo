@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { ConvexError } from "convex/values";
 import type { Color } from "../../convex/lib/ludo";
 import { COLOR_START, SAFE_CELLS } from "../../convex/lib/ludo";
 
@@ -236,6 +237,9 @@ export function normalizeCode(raw: string): string {
 }
 
 export function formatConvexError(err: unknown, fallback: string): string {
+  if (err instanceof ConvexError && typeof err.data === "string") {
+    return err.data;
+  }
   if (err instanceof Error) {
     const msg = err.message;
     const m = msg.match(/Uncaught Error:\s*(.+?)(?:\s+at\s|$)/);

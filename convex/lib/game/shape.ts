@@ -75,6 +75,7 @@ const PAYLOADS: Record<string, Check> = {
   }),
   TURN_TIMED_OUT: shape({ color }),
   PLAYER_ELIMINATED: shape({ color, reason: oneOf("timeout", "left", "abandoned") }),
+  PLAYER_REINSTATED: shape({ color }),
   PLAYER_FINISHED: shape({ color, rank: int }),
   TEAM_FINISHED: shape({ team }),
   GAME_FINISHED: shape({

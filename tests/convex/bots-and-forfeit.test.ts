@@ -275,6 +275,61 @@ describe("forfeit through leaveRoom", () => {
     expect(state.seats.find((s) => s.color === leaver)?.eliminated).toBe(true);
   });
 
+  it("a leaver on a new device asks to rejoin; host approval reinstates the seat", async () => {
+    const room = await startedRoom(t, { players: 3 });
+    const seat = (await bundle(t, room.roomId)).room.currentTurn;
+    const leaver = (Object.keys(room.clients) as Color[]).find(
+      (c) => c !== seat && room.clients[c] !== room.host,
+    )!;
+    const leaverName = (await bundle(t, room.roomId)).players.find((p) => p.color === leaver)!.name;
+    await t.mutation(api.rooms.leaveRoom, { roomId: room.roomId, clientId: seatClient(room, leaver) });
+
+    const device = clientId(99);
+    const { requestId } = await t.mutation(api.rooms.joinRoom, { code: room.code, clientId: device, name: leaverName });
+    if (!requestId) throw new Error("expected a pending rejoin request");
+    const requests = await t.query(api.rooms.listPendingRejoinRequests, { roomId: room.roomId, clientId: room.host });
+    expect(requests.map((r) => r.playerColor)).toEqual([leaver]);
+
+    const seq = await head(room.roomId);
+    await t.mutation(api.rooms.respondRejoinRequest, { requestId, clientId: room.host, approve: true });
+    expect(await typesAfter(room.roomId, seq)).toEqual(["PLAYER_REINSTATED"]);
+
+    const after = await bundle(t, room.roomId, device);
+    expect(after.me?.color).toBe(leaver);
+    expect(after.players.find((p) => p.color === leaver)?.eliminated).toBe(false);
+    expect(after.tokens.filter((tok) => tok.color === leaver).map((tok) => tok.steps)).toEqual([-1, -1, -1, -1]);
+    await expectLiveEqualsReplay(t, room.roomId);
+
+    let reached = false;
+    for (let i = 0; i < 6 && !reached; i++) {
+      const cur = (await bundle(t, room.roomId)).room.currentTurn;
+      if (cur === leaver) reached = true;
+      else await rollAs(t, dice, room.roomId, seatClient(room, cur), 2);
+    }
+    expect(reached).toBe(true);
+    await expectLiveEqualsReplay(t, room.roomId);
+  });
+
+  it("a leaver on the same device must ask again; a denial keeps the seat forfeited", async () => {
+    const room = await startedRoom(t, { players: 3 });
+    const seat = (await bundle(t, room.roomId)).room.currentTurn;
+    const leaver = (Object.keys(room.clients) as Color[]).find(
+      (c) => c !== seat && room.clients[c] !== room.host,
+    )!;
+    const leaverClient = seatClient(room, leaver);
+    await t.mutation(api.rooms.leaveRoom, { roomId: room.roomId, clientId: leaverClient });
+    expect((await bundle(t, room.roomId, leaverClient)).me).toBeNull();
+
+    const { requestId } = await t.mutation(api.rooms.joinRoom, { code: room.code, clientId: leaverClient, name: "anything" });
+    if (!requestId) throw new Error("expected a pending rejoin request");
+    await t.mutation(api.rooms.respondRejoinRequest, { requestId, clientId: room.host, approve: false });
+
+    expect(await t.query(api.rooms.getRejoinRequestStatus, { requestId })).toEqual({ status: "denied" });
+    const after = await bundle(t, room.roomId, leaverClient);
+    expect(after.me).toBeNull();
+    expect(after.players.find((p) => p.color === leaver)?.eliminated).toBe(true);
+  });
+
   it("leaving after being eliminated adds no events", async () => {
     const room = await startedRoom(t, { players: 3 });
     const seat = (await bundle(t, room.roomId)).room.currentTurn;

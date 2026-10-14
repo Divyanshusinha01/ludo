@@ -47,6 +47,7 @@ export type GameCommand =
   | { type: "PassRoll"; from: Color; to: Color }
   | { type: "ExpireTurn" }
   | { type: "ForfeitSeat"; color: Color; reason: "left" | "abandoned" }
+  | { type: "ReinstateSeat"; color: Color }
   | { type: "FinishAbandoned" };
 
 export type DecideResult =
@@ -470,6 +471,15 @@ export function decide(
       appendTurnAdvance(state, gameId, createdAt, "eliminated", seat, drafts);
     }
     return simulate(state, gameId, drafts);
+  }
+
+  if (command.type === "ReinstateSeat") {
+    return simulate(state, gameId, [
+      draft(gameId, createdAt, systemActor(), {
+        eventType: "PLAYER_REINSTATED",
+        payload: { color: command.color },
+      }),
+    ]);
   }
 
   if (command.type === "FinishAbandoned") {

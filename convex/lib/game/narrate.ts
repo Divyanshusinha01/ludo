@@ -43,6 +43,10 @@ export function describeEvent(prev: GameState, event: LudoEvent): string[] {
       const to = seatByColor(prev, event.payload.to)?.name ?? event.payload.to;
       return [`${from} passed a roll to ${to}`];
     }
+    case "PLAYER_REINSTATED":
+      return [
+        `${seatByColor(prev, event.payload.color)?.name ?? event.payload.color} rejoined`,
+      ];
     case "TOKEN_MOVED":
     case "TOKEN_CAPTURED":
     case "EXTRA_TURN_GRANTED":

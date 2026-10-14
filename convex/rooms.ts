@@ -143,7 +143,9 @@ export async function loadRoomBundle(
   );
 
   const me = sessionId
-    ? (players.find((p) => p.clientId === sessionId) ?? null)
+    ? (players.find(
+        (p) => p.clientId === sessionId && !isForfeitedSeat(p, room),
+      ) ?? null)
     : null;
 
   return {
@@ -209,6 +211,11 @@ const joinResultValidator = v.union(
   }),
 );
 
+/** A seat that left a game still in play; it returns only through a host-approved reclaim. */
+function isForfeitedSeat(seat: Doc<"players">, room: Doc<"rooms">): boolean {
+  return seat.leftAt !== undefined && room.status === "playing" && !room.ranked;
+}
+
 function namesMatch(a: string, b: string): boolean {
   return a.trim().toLowerCase() === b.trim().toLowerCase();
 }
@@ -220,11 +227,20 @@ async function claimDisconnectedSeat(
   clientId: string,
   now: number,
 ) {
+  if (isForfeitedSeat(seat, room) && seat.eliminated) {
+    await commitCommand(
+      ctx,
+      room,
+      { type: "ReinstateSeat", color: seat.color as Color },
+      { now, actorClientId: clientId },
+    );
+  }
   // The seat keeps its name: names are part of the event-sourced seat snapshot.
   await ctx.db.patch(seat._id, {
     clientId,
     connected: true,
     lastSeenAt: now,
+    leftAt: undefined,
   });
   // If this seat was the previous host and room still points at old id, keep host.
   // Host stays whoever currently holds hostClientId; reclaiming does not steal it
@@ -574,8 +590,9 @@ export const joinRoom = mutation({
       .unique();
 
     const now = Date.now();
+    const forfeited = existing && isForfeitedSeat(existing, room) ? existing : null;
 
-    if (existing) {
+    if (existing && !forfeited) {
       await ctx.db.patch(existing._id, {
         connected: true,
         lastSeenAt: now,
@@ -618,12 +635,15 @@ export const joinRoom = mutation({
     }
 
     // Name-based reclaim: same name as a disconnected seat, different clientId.
-    const nameMatch = players.find(
-      (p) =>
-        !p.isBot &&
-        p.clientId !== clientId &&
-        namesMatch(p.name, name),
-    );
+    // A seat this client forfeited by leaving is reclaimed the same way.
+    const nameMatch =
+      forfeited ??
+      players.find(
+        (p) =>
+          !p.isBot &&
+          p.clientId !== clientId &&
+          namesMatch(p.name, name),
+      );
 
     if (nameMatch) {
       if (nameMatch.connected) {
@@ -633,7 +653,9 @@ export const joinRoom = mutation({
       if (nameMatch.accountId && nameMatch.accountId !== signedIn?.account._id) {
         fail(GameError.nameTaken);
       }
-      if (nameMatch.eliminated) {
+      if (nameMatch.leftAt !== undefined) {
+        if (room.status === "finished") fail(GameError.gameFinished);
+      } else if (nameMatch.eliminated) {
         fail(GameError.eliminated);
       }
 
@@ -811,7 +833,7 @@ export const heartbeat = mutation({
         q.eq("roomId", args.roomId).eq("clientId", clientId),
       )
       .unique();
-    if (!player) return null;
+    if (!player || player.leftAt !== undefined) return null;
     const now = Date.now();
     // Soft rate limit — ignore floods without erroring.
     if (now - player.lastSeenAt < HEARTBEAT_MIN_INTERVAL_MS) return null;
@@ -970,6 +992,10 @@ export const respondRejoinRequest = mutation({
         resolvedAt: now,
       });
       fail(GameError.rejoinExpired);
+    }
+    if (seat.leftAt !== undefined && room.status !== "playing") {
+      await ctx.db.patch(req._id, { status: "denied", resolvedAt: now });
+      return null;
     }
 
     // Ensure requester isn't already seated as someone else in this room.
