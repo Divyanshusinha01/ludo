@@ -11,6 +11,7 @@ import { BOT_THINK_MS } from "./bot";
 import { GameError, fail } from "./errors";
 import { withEvents } from "./events";
 import { logEvent } from "./log";
+import { armPresenceSweep } from "./jobs";
 import { recordUnrankedStats, settleRankedRoom } from "./settlement";
 import {
   decide,
@@ -407,6 +408,9 @@ export async function commitEvents(
       turnId: state.turnNumber,
       expectedSeq: newHead,
     });
+    // Presence sweeps run only while a game is live; one read per commit, a
+    // write at most every PRESENCE_SWEEP_MS.
+    await armPresenceSweep(ctx, opts.now);
   }
 
   return {

@@ -138,12 +138,19 @@ export async function runMatchmaker(
   ctx: MutationCtx,
   queue: QueueName,
   now: number,
-): Promise<{ rooms: number; more: boolean }> {
+): Promise<{ rooms: number; more: boolean; pending: number }> {
   const config = QUEUES[queue];
-  const waiting = await ctx.db
+  const found = await ctx.db
     .query("matchQueue")
     .withIndex("by_queue_status_joinedAt", (q) => q.eq("queue", queue).eq("status", "waiting"))
     .take(MATCH_BATCH);
+  // Dead tabs' tickets are dropped as the poll finds them, so a stopped chain
+  // never leaves a ghost "waiting" status behind for the slow cron to clear.
+  const waiting: typeof found = [];
+  for (const ticket of found) {
+    if (now - ticket.lastPingAt > STALE_TICKET_MS) await ctx.db.delete(ticket._id);
+    else waiting.push(ticket);
+  }
   const groups = formGroups(waiting, config.size, now);
 
   for (const group of groups) {
@@ -169,7 +176,11 @@ export async function runMatchmaker(
     }
     logEvent("match_made", { roomCode: code, queue, players: seats.length });
   }
-  return { rooms: groups.length, more: groups.length >= MAX_GROUPS_PER_RUN };
+  // Live tickets left unmatched: the caller keeps polling only while this is > 0
+  // (rating windows widen with wait time, so a waiting ticket can match later).
+  const live = waiting.filter((t) => now - t.lastPingAt <= STALE_TICKET_MS).length;
+  const pending = live - groups.length * config.size;
+  return { rooms: groups.length, more: groups.length >= MAX_GROUPS_PER_RUN, pending };
 }
 
 /**

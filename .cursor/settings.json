@@ -4,7 +4,7 @@
       "enabled": false
     },
     "convex": {
-      "enabled": false
+      "enabled": true
     },
     "vercel": {
       "enabled": true

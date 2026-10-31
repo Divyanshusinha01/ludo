@@ -45,7 +45,8 @@ export function Lobby({ data, roomId, clientId, code }: Props) {
   const [kickBusy, setKickBusy] = useState<Color | null>(null);
   const [addBotBusy, setAddBotBusy] = useState<Color | "any" | null>(null);
 
-  useRoomPresence(roomId, clientId);
+  // Lobbies have no AFK rules, so a hidden tab need not keep pinging.
+  useRoomPresence(roomId, clientId, true, "visible");
 
   const { room, players, me } = data;
   const isHost = !!me?.isHost;

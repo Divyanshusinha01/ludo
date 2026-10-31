@@ -141,7 +141,8 @@ export function GameScreen({ data, roomId, clientId, spectate }: Props) {
   );
   const closeProfile = useCallback(() => setProfilePlayerId(null), []);
 
-  useRoomPresence(roomId, clientId, !readOnly);
+  // A finished game needs no presence interval; wake-ups and pagehide still run.
+  useRoomPresence(roomId, clientId, !readOnly, data.room.status === "finished" ? "idle" : "live");
   const reporter = useOpsReporter(roomId, clientId, !readOnly);
   const { connected } = useConnectionResync({
     roomId,

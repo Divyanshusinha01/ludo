@@ -44,7 +44,7 @@ adds three things on top of that:
   visible again or the browser fires `online`. The server ignores heartbeats
   less than 5s after the previous one (`HEARTBEAT_MIN_INTERVAL_MS`), even for a
   seat that was just marked away, so the hook sends a second heartbeat just
-  after that window. `cleanup.tick` (every 30s) marks a seat away after 45s
+  after that window. `cleanup.presenceTick` (every 30s, only while a game is live) marks a seat away after 45s
   without a heartbeat.
 - **Connection tracking** (`src/hooks/useConnectionResync.ts`): subscribes to
   `ConvexReactClient.subscribeToConnectionState`. While the socket is down,

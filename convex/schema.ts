@@ -355,7 +355,8 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_room_to", ["roomId", "toColor"])
-    .index("by_room", ["roomId"]),
+    .index("by_room", ["roomId"])
+    .index("by_createdAt", ["createdAt"]),
 
   /**
    * Raw metric samples, insert-only. Successful server mutations and batched
@@ -381,6 +382,15 @@ export default defineSchema({
     activePlayers: v.number(),
     connectedPlayers: v.number(),
   }).index("by_minute", ["minute"]),
+
+  /**
+   * One row per self-rescheduling background job (see lib/jobs.ts). `nextRunAt`
+   * is when the armed run is due; a row in the past means no run is pending.
+   */
+  jobState: defineTable({
+    key: v.string(),
+    nextRunAt: v.number(),
+  }).index("by_key", ["key"]),
 
   /** Most recent client-reported rejections and errors (capped by the rollup). */
   opsErrors: defineTable({

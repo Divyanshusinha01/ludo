@@ -105,7 +105,7 @@ Three ranked queues (`convex/lib/matchmaking.ts`):
 2. **Wait**: the client pings (`queuePing`) while searching and watches
    `queueStatus`. A waiting ticket with no ping for 20s counts as gone.
 3. **Match**: `matchmaking.matchmake` runs after every join, and the
-   `matchmaking sweep` cron schedules it for every queue every 10s as a safety
+   `matchmaking.matchmake` re-arms itself every 10s only while a live ticket waits, and a 5 min `matchmaking sweep` cron restarts it as a safety
    net. One run reads up to 64 waiting tickets, forms up to 8 groups
    (`formGroups`), creates each started room with `createStartedRoom`
    (`convex/lib/roomFactory.ts`), and marks the tickets `matched` in the same
@@ -114,7 +114,7 @@ Three ranked queues (`convex/lib/matchmaking.ts`):
 4. **Leave** (`leaveQueue`): deletes a waiting ticket; with no ticket it is a
    no-op. If the matcher already seated the player, it returns
    `{ status: "matched", roomId }` and the client goes to the game.
-5. **Cleanup**: `cleanup.tick` (30s cron) drops stale waiting tickets and
+5. **Cleanup**: `cleanup.tick` (15 min cron) drops stale waiting tickets and
    matched tickets whose game is over. A matched player who never arrives falls
    under the normal away / forfeit / turn-timeout flow.
 

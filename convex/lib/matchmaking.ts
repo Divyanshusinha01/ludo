@@ -33,6 +33,10 @@ export const STALE_TICKET_MS = 20_000;
 export const QUEUE_PING_MIN_INTERVAL_MS = 2_000;
 /** Matched tickets are re-checked this often and dropped once their room is over. */
 export const MATCHED_TICKET_RECHECK_MS = 60_000;
+/** While tickets wait, the matcher re-runs this often (acceptance windows widen over time). */
+export const MATCHMAKE_POLL_MS = 10_000;
+/** Safety-net cron: restarts a matcher chain that died while tickets were waiting. */
+export const MATCHMAKE_SAFETY_MS = 5 * 60_000;
 /** Tickets read per matcher run; groups beyond this wait for the next run. */
 export const MATCH_BATCH = 64;
 /** Rooms created per matcher run, to keep one transaction small. */

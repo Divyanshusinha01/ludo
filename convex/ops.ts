@@ -39,6 +39,8 @@ export const OPS_ERRORS_CAP = 200;
 /** Minutes of history the dashboard aggregates. */
 export const DASHBOARD_WINDOW_MINUTES = 60;
 const MAX_GAUGE_ROOMS = 1_000;
+/** Unchanged gauges are re-recorded at most this often. */
+const GAUGE_REFRESH_MS = 30 * MINUTE_MS;
 const RETENTION_DELETE_BATCH = 500;
 const MAX_ERROR_MESSAGE_LEN = 200;
 
@@ -228,8 +230,27 @@ async function snapshotGauges(ctx: MutationCtx, minute: number): Promise<void> {
     .query("opsGauges")
     .withIndex("by_minute", (q) => q.eq("minute", minute))
     .unique();
-  if (existing) await ctx.db.patch(existing._id, gauges);
-  else await ctx.db.insert("opsGauges", gauges);
+  if (existing) {
+    if (!sameGauges(existing, gauges)) await ctx.db.patch(existing._id, gauges);
+    return;
+  }
+  // Unchanged values are not rewritten every run (an idle deployment would
+  // otherwise insert a row per run for nothing). A fresh row is still written
+  // every GAUGE_REFRESH_MS so the dashboard's window never loses its gauge.
+  const latest = await ctx.db.query("opsGauges").withIndex("by_minute").order("desc").first();
+  if (latest && sameGauges(latest, gauges) && minute - latest.minute < GAUGE_REFRESH_MS) return;
+  await ctx.db.insert("opsGauges", gauges);
+}
+
+function sameGauges(
+  a: { activeRooms: number; activePlayers: number; connectedPlayers: number },
+  b: { activeRooms: number; activePlayers: number; connectedPlayers: number },
+): boolean {
+  return (
+    a.activeRooms === b.activeRooms &&
+    a.activePlayers === b.activePlayers &&
+    a.connectedPlayers === b.connectedPlayers
+  );
 }
 
 async function pruneOps(ctx: MutationCtx, now: number): Promise<void> {

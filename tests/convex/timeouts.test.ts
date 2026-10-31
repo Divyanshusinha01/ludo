@@ -5,6 +5,7 @@ import { MAX_TIMEOUT_LIVES, teamTeammateColor, TURN_TIMEOUT_MS } from "../../con
 import {
   advance,
   bundle,
+  disablePresenceSweep,
   expectLiveEqualsReplay,
   expectRejectedUnchanged,
   moveAs,
@@ -288,6 +289,8 @@ describe("turn timeouts", () => {
 
   it("a rematch re-arms the clock for the new match", async () => {
     const room = await startedRoom(t, { players: 2 });
+    // Seats sit silent for minutes here; this test is about the turn clock, not presence.
+    await disablePresenceSweep(t);
     for (let i = 0; i < MAX_TIMEOUT_LIVES * 2 - 1; i++) {
       await advance(t, TURN_TIMEOUT_MS + 10);
     }

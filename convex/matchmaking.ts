@@ -1,12 +1,20 @@
-import { internalMutation, mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server";
+import { armJob } from "./lib/jobs";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { optionalAccount } from "./lib/auth";
 import { GameError, fail } from "./lib/errors";
 import { logEvent } from "./lib/log";
 import { assertValidClientId } from "./lib/session";
-import { QUEUE_NAMES, QUEUE_PING_MIN_INTERVAL_MS, queueValidator } from "./lib/matchmaking";
 import {
+  MATCHMAKE_POLL_MS,
+  QUEUE_NAMES,
+  QUEUE_PING_MIN_INTERVAL_MS,
+  queueValidator,
+  type QueueName,
+} from "./lib/matchmaking";
+import {
+  purgeQueueTickets,
   activeRankedGame,
   IDLE,
   queueStatusValidator,
@@ -113,6 +121,8 @@ export const queuePing = mutation({
     if (ticket?.status === "waiting" && now - ticket.lastPingAt >= QUEUE_PING_MIN_INTERVAL_MS) {
       await ctx.db.patch(ticket._id, { lastPingAt: now });
     }
+    // Restarts the poll chain if it died; read-only while one is pending.
+    if (ticket?.status === "waiting") await armMatchmaker(ctx, ticket.queue, now);
     return await ticketStatus(ctx, ticket);
   },
 });
@@ -137,21 +147,46 @@ export const matchmake = internalMutation({
   args: { queue: queueValidator },
   returns: v.object({ rooms: v.number() }),
   handler: async (ctx, args) => {
-    const { rooms, more } = await runMatchmaker(ctx, args.queue, Date.now());
+    const now = Date.now();
+    const { rooms, more, pending } = await runMatchmaker(ctx, args.queue, now);
     if (more) {
       await ctx.scheduler.runAfter(0, internal.matchmaking.matchmake, { queue: args.queue });
+    } else if (pending > 0) {
+      await armMatchmaker(ctx, args.queue, now);
     }
     return { rooms };
   },
 });
 
-/** Cron safety net: matches anything a missed or conflicted scheduled run left behind. */
+/** Poll this queue again soon; a no-op while a poll is already pending. */
+async function armMatchmaker(ctx: MutationCtx, queue: QueueName, now: number): Promise<void> {
+  await armJob(
+    ctx,
+    `matchmake:${queue}`,
+    MATCHMAKE_POLL_MS,
+    (delay) => ctx.scheduler.runAfter(delay, internal.matchmaking.matchmake, { queue }),
+    now,
+  );
+}
+
+/**
+ * Cron safety net (every few minutes): drops dead tickets and restarts the
+ * matcher for any queue that still has someone waiting. Idle queues cost one
+ * indexed read each and schedule nothing.
+ */
 export const sweep = internalMutation({
   args: {},
   returns: v.null(),
   handler: async (ctx) => {
+    await purgeQueueTickets(ctx, Date.now(), 200);
     for (const queue of QUEUE_NAMES) {
-      await ctx.scheduler.runAfter(0, internal.matchmaking.matchmake, { queue });
+      const waiting = await ctx.db
+        .query("matchQueue")
+        .withIndex("by_queue_status_joinedAt", (q) => q.eq("queue", queue).eq("status", "waiting"))
+        .first();
+      if (waiting) {
+        await ctx.scheduler.runAfter(0, internal.matchmaking.matchmake, { queue });
+      }
     }
     return null;
   },

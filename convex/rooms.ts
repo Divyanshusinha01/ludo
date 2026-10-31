@@ -824,7 +824,9 @@ export const heartbeat = mutation({
     roomId: v.id("rooms"),
     clientId: v.string(),
   },
-  returns: v.null(),
+  // "gone": no live seat for this client (room deleted, seat left). The client
+  // stops its heartbeat loop instead of polling a seat that no longer exists.
+  returns: v.union(v.literal("ok"), v.literal("gone")),
   handler: async (ctx, args) => {
     const clientId = assertValidClientId(args.clientId);
     const player = await ctx.db
@@ -833,19 +835,18 @@ export const heartbeat = mutation({
         q.eq("roomId", args.roomId).eq("clientId", clientId),
       )
       .unique();
-    if (!player || player.leftAt !== undefined) return null;
+    if (!player || player.leftAt !== undefined) return "gone" as const;
     const now = Date.now();
     // Soft rate limit — ignore floods without erroring.
-    if (now - player.lastSeenAt < HEARTBEAT_MIN_INTERVAL_MS) return null;
+    if (now - player.lastSeenAt < HEARTBEAT_MIN_INTERVAL_MS) return "ok" as const;
     await ctx.db.patch(player._id, {
       connected: true,
       lastSeenAt: now,
     });
-    await recordSample(ctx, {
-      kind: player.connected ? "heartbeat" : "reconnect",
-      at: now,
-    });
-    return null;
+    // Only the away -> present transition is worth a metric sample; recording
+    // every routine heartbeat tripled its write cost for no signal.
+    if (!player.connected) await recordSample(ctx, { kind: "reconnect", at: now });
+    return "ok" as const;
   },
 });
 

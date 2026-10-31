@@ -37,6 +37,7 @@ import type * as lib_game_shape from "../lib/game/shape.js";
 import type * as lib_game_state from "../lib/game/state.js";
 import type * as lib_gameStore from "../lib/gameStore.js";
 import type * as lib_gameSummaries from "../lib/gameSummaries.js";
+import type * as lib_jobs from "../lib/jobs.js";
 import type * as lib_log from "../lib/log.js";
 import type * as lib_ludo from "../lib/ludo.js";
 import type * as lib_matchQueue from "../lib/matchQueue.js";
@@ -94,6 +95,7 @@ declare const fullApi: ApiFromModules<{
   "lib/game/state": typeof lib_game_state;
   "lib/gameStore": typeof lib_gameStore;
   "lib/gameSummaries": typeof lib_gameSummaries;
+  "lib/jobs": typeof lib_jobs;
   "lib/log": typeof lib_log;
   "lib/ludo": typeof lib_ludo;
   "lib/matchQueue": typeof lib_matchQueue;

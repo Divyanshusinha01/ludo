@@ -111,6 +111,30 @@ export async function advance(t: T, ms: number = STEP_MS): Promise<void> {
   await t.finishInProgressScheduledFunctions();
 }
 
+/**
+ * Switch the presence sweep off for a test that is about something else and
+ * leaves seats silent for minutes (the sweep would, correctly, mark them away
+ * and eventually crown the last connected seat). Cancels the pending sweep and
+ * parks `jobState.nextRunAt` far in the future so commits never re-arm it.
+ */
+export async function disablePresenceSweep(t: T): Promise<void> {
+  await t.run(async (ctx) => {
+    const pending = await ctx.db.system.query("_scheduled_functions").collect();
+    for (const job of pending) {
+      if (job.state.kind === "pending" && job.name.includes("presenceTick")) {
+        await ctx.scheduler.cancel(job._id);
+      }
+    }
+    const parked = Date.now() + 365 * 24 * 60 * 60 * 1000;
+    const row = await ctx.db
+      .query("jobState")
+      .withIndex("by_key", (q) => q.eq("key", "presence"))
+      .unique();
+    if (row) await ctx.db.patch(row._id, { nextRunAt: parked });
+    else await ctx.db.insert("jobState", { key: "presence", nextRunAt: parked });
+  });
+}
+
 /** Jump the wall clock without firing any timer (scheduled jobs stay pending). */
 export function setClock(ms: number): void {
   vi.setSystemTime(ms);

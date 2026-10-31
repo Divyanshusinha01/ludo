@@ -222,7 +222,7 @@ describe("read-only enforcement", () => {
 
     const before = await snapshot(t, room.roomId);
     expect(await t.mutation(api.rooms.leaveRoom, { roomId: room.roomId, clientId: WATCHER })).toEqual({ emptied: false });
-    expect(await t.mutation(api.rooms.heartbeat, { roomId: room.roomId, clientId: WATCHER })).toBeNull();
+    expect(await t.mutation(api.rooms.heartbeat, { roomId: room.roomId, clientId: WATCHER })).toBe("gone");
     expect(await snapshot(t, room.roomId)).toEqual(before);
   });
 

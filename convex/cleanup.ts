@@ -1,4 +1,5 @@
 import { internalMutation, MutationCtx } from "./_generated/server";
+import { armPresenceSweep } from "./lib/jobs";
 import { Id } from "./_generated/dataModel";
 import { Color } from "./lib/ludo";
 import { ATTEMPT_ROW_TTL_MS } from "./lib/rateLimit";
@@ -25,11 +26,34 @@ const VOICE_SIGNAL_TTL_MS = 3 * 60 * 1000;
 /** Bounded per tick; leftovers are picked up next minute. */
 const AUTH_PURGE_BATCH = 200;
 
+/**
+ * Housekeeping plus one presence sweep. Runs on a slow cron as a safety net;
+ * the 30s presence cadence is driven by `presenceTick` while games are live.
+ */
 export const tick = internalMutation({
   args: {},
   handler: async (ctx) => {
     const now = Date.now();
+    await housekeeping(ctx, now);
+    await sweepPresence(ctx, now);
+  },
+});
 
+/**
+ * Re-arms itself every PRESENCE_SWEEP_MS while a playing room exists and stops
+ * once none do, so an idle deployment runs no presence work. Armed by every
+ * in-play commit (see `armPresenceSweep`).
+ */
+export const presenceTick = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    await sweepPresence(ctx, Date.now());
+  },
+});
+
+/** TTL purges and expiry; none of this is latency sensitive. */
+async function housekeeping(ctx: MutationCtx, now: number): Promise<void> {
+  {
     const expiredSessions = await ctx.db
       .query("authSessions")
       .withIndex("by_expiresAt", (q) => q.lt("expiresAt", now))
@@ -48,13 +72,12 @@ export const tick = internalMutation({
     await purgeQueueTickets(ctx, now, AUTH_PURGE_BATCH);
     await purgeStaleSpectators(ctx, now, AUTH_PURGE_BATCH);
 
-    // Orphaned voice signals (no by_createdAt index — scan is fine; volume is low).
-    const voiceSignals = await ctx.db.query("voiceSignals").collect();
-    for (const s of voiceSignals) {
-      if (now - s.createdAt > VOICE_SIGNAL_TTL_MS) {
-        await ctx.db.delete(s._id);
-      }
-    }
+    // Orphaned voice signals: indexed range, bounded per run.
+    const voiceSignals = await ctx.db
+      .query("voiceSignals")
+      .withIndex("by_createdAt", (q) => q.lt("createdAt", now - VOICE_SIGNAL_TTL_MS))
+      .take(AUTH_PURGE_BATCH);
+    for (const s of voiceSignals) await ctx.db.delete(s._id);
 
     // Lobby TTL — createdAt is required, so a range query is exact.
     const expiredLobbies = await ctx.db
@@ -89,7 +112,6 @@ export const tick = internalMutation({
       }
     }
 
-    // Presence / AFK / idle only matter for active games.
     const playingRooms = await ctx.db
       .query("rooms")
       .withIndex("by_status", (q) => q.eq("status", "playing"))
@@ -100,24 +122,47 @@ export const tick = internalMutation({
       .withIndex("by_status", (q) => q.eq("status", "lobby"))
       .collect();
 
-    // Expire pending rejoin requests in live rooms.
-    for (const room of [...lobbyRooms, ...playingRooms]) {
-      const pending = await ctx.db
-        .query("rejoinRequests")
-        .withIndex("by_room_status", (q) =>
-          q.eq("roomId", room._id).eq("status", "pending"),
-        )
-        .collect();
-      for (const req of pending) {
-        if (now - req.createdAt > REJOIN_PENDING_TTL_MS) {
-          await ctx.db.patch(req._id, {
-            status: "denied",
-            resolvedAt: now,
-          });
-        }
+    await expireRejoinRequests(ctx, [...lobbyRooms, ...playingRooms], now);
+  }
+}
+
+/** Deny rejoin requests nobody answered in time. */
+async function expireRejoinRequests(
+  ctx: MutationCtx,
+  rooms: Array<{ _id: Id<"rooms"> }>,
+  now: number,
+): Promise<void> {
+  for (const room of rooms) {
+    const pending = await ctx.db
+      .query("rejoinRequests")
+      .withIndex("by_room_status", (q) =>
+        q.eq("roomId", room._id).eq("status", "pending"),
+      )
+      .collect();
+    for (const req of pending) {
+      if (now - req.createdAt > REJOIN_PENDING_TTL_MS) {
+        await ctx.db.patch(req._id, { status: "denied", resolvedAt: now });
       }
     }
+  }
+}
 
+/**
+ * Presence / AFK / idle handling for rooms being played. Re-arms the sweep
+ * while a playing room remains.
+ */
+async function sweepPresence(ctx: MutationCtx, now: number): Promise<void> {
+  const playingRooms = await ctx.db
+    .query("rooms")
+    .withIndex("by_status", (q) => q.eq("status", "playing"))
+    .collect();
+  if (playingRooms.length === 0) return;
+
+  // Rejoin requests live in playing rooms and have a 3 min TTL, so they are
+  // expired at the presence cadence rather than the slow housekeeping one.
+  await expireRejoinRequests(ctx, playingRooms, now);
+
+  {
     for (const room of playingRooms) {
       const activityAge = now - (room.lastActivityAt ?? room.createdAt);
 
@@ -185,8 +230,15 @@ export const tick = internalMutation({
       // Only mark presence; do not double-skip turns here.
       void current;
     }
-  },
-});
+  }
+
+  // Keep sweeping only while a room is still being played.
+  const stillPlaying = await ctx.db
+    .query("rooms")
+    .withIndex("by_status", (q) => q.eq("status", "playing"))
+    .first();
+  if (stillPlaying) await armPresenceSweep(ctx, now);
+}
 
 /**
  * End an underpopulated match: every other seat still in play forfeits as

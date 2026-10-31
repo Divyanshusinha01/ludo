@@ -134,7 +134,8 @@ describe("server samples", () => {
     setClock(Date.now() + HEARTBEAT_MIN_INTERVAL_MS);
     await t.mutation(api.rooms.heartbeat, { roomId: room.roomId, clientId: client });
 
-    expect((await sampleKinds()).slice(base)).toEqual(["heartbeat", "reconnect"]);
+    // Routine heartbeats write no sample; only the away -> present transition does.
+    expect((await sampleKinds()).slice(base)).toEqual(["reconnect"]);
   });
 
   it("joinRoom by a seated client records a reconnect, not a join", async () => {
